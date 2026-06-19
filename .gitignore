@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode build output
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# XcodeGen generates the project from project.yml (the source of truth).
+# Run `xcodegen generate` after cloning.
+*.xcodeproj
+*.xcworkspace
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Local tooling / editor
+.claude/
+.vscode/
+.idea/
+
+# Python virtualenvs (local models live under ~/.narrateify at runtime)
+venv/
+*.pyc
+__pycache__/

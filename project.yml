@@ -1,0 +1,44 @@
+name: Narrateify
+options:
+  bundleIdPrefix: com.narrateify
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+targets:
+  Narrateify:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        LSUIElement: true
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHumanReadableCopyright: "Copyright © 2026. All rights reserved."
+        NSServices:
+          - NSMenuItem:
+              default: "Narrate with Narrateify"
+            NSMessage: narrateSelection
+            NSPortName: Narrateify
+            NSSendTypes:
+              - NSStringPboardType
+              - public.utf8-plain-text
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.narrateify.Narrateify
+        PRODUCT_NAME: Narrateify
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: Info.plist
+        # Keep Hardened Runtime; App Sandbox is intentionally omitted (no
+        # entitlements file -> unsandboxed, required for cross-app keystrokes
+        # and launching /usr/sbin/screencapture).
+        ENABLE_HARDENED_RUNTIME: true
+        SWIFT_VERSION: "5.0"
+        # Allow ad-hoc local builds without a development team.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
