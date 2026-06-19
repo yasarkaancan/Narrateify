@@ -43,6 +43,23 @@ engine of your choice: **ElevenLabs** or **OpenAI** in the cloud, or
 
 ---
 
+## Download
+
+Grab the latest **`Narrateify.dmg`** from the
+[**Releases**](https://github.com/yasarkaancan/Narrateify/releases/latest) page,
+open it, and drag **Narrateify** into your **Applications** folder.
+
+> **First launch (one-time Gatekeeper step).** The app is open-source and
+> **ad-hoc signed**, not notarized by Apple, so macOS will warn the first time.
+> Either **right-click the app → Open → Open**, or run:
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Narrateify.app
+> ```
+> After that it launches normally. (See the privacy section — the app is fully
+> open-source and you can build it yourself below.)
+
+---
+
 ## Install (build from source)
 
 Narrateify is built with [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -188,6 +205,19 @@ Issues and pull requests are welcome. Because the Xcode project is generated:
    settings, then run `xcodegen generate`.
 2. Keep new source files in `Sources/` — they're picked up automatically.
 3. Build before submitting: `xcodebuild -project Narrateify.xcodeproj -scheme Narrateify build`.
+
+### Cutting a release (maintainers)
+
+Each release ships a drag-to-install DMG built by `scripts/make-dmg.sh`:
+
+```bash
+./scripts/make-dmg.sh                       # -> dist/Narrateify-<version>.dmg
+gh release create vX.Y.Z dist/Narrateify-*.dmg --title "Narrateify vX.Y.Z" --notes "…"
+```
+
+Bump `MARKETING_VERSION` in `project.yml` before tagging. The in-app updater
+compares the running version against the latest release tag, so the tag
+(e.g. `v1.2.0`) must be ≥ the shipped version for users to be notified.
 
 ---
 

@@ -20,6 +20,10 @@ xcuserdata/
 .build/
 .swiftpm/
 
+# Release packaging (scripts/make-dmg.sh)
+.build-dmg/
+dist/
+
 # Local tooling / editor
 .claude/
 .vscode/
