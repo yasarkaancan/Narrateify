@@ -97,6 +97,11 @@ final class AppState: ObservableObject {
     @Published var status: String = "Ready"
     /// True while audio is being synthesized (drives the overlay's first phase).
     @Published private(set) var isSynthesizing = false
+    /// True while a short voice preview is being fetched/synthesized.
+    @Published private(set) var isPreviewing = false
+    /// Whether the Settings window is currently on screen (drives the menu's
+    /// "Settings (open)" affordance).
+    @Published var settingsWindowOpen = false
     /// Voices fetched from the ElevenLabs API (not persisted).
     @Published var voices: [ElevenLabsClient.Voice] = []
     @Published var voicesStatus: String = ""
@@ -260,6 +265,62 @@ final class AppState: ObservableObject {
             if let fetched = try? await ChatterboxClient.fetchVoices(baseURL: url), !fetched.isEmpty {
                 self.chatterboxVoices = fetched
             }
+        }
+    }
+
+    // MARK: Voice preview
+
+    /// Plays a short sample of the currently-selected voice so the user can
+    /// audition it before narrating. Uses ElevenLabs' free hosted preview when
+    /// available; otherwise synthesizes a brief sample with the active engine.
+    /// Previews are NOT saved to history.
+    func previewVoice() {
+        guard !isPreviewing else { return }
+        let sample = "Hi! This is a quick preview of how this voice sounds."
+        isPreviewing = true
+        status = "Previewing voice…"
+
+        Task {
+            do {
+                let data: Data
+                switch provider {
+                case .elevenLabs:
+                    if let v = voices.first(where: { $0.voiceId == voiceId }),
+                       let preview = v.previewURL {
+                        (data, _) = try await URLSession.shared.data(from: preview)
+                    } else {
+                        let client = ElevenLabsClient(apiKey: apiKey, voiceId: voiceId,
+                                                      modelId: modelId, settings: voiceSettings)
+                        data = try await client.synthesize(text: sample)
+                    }
+                case .openAI:
+                    let client = OpenAIClient(apiKey: openAIKey, voice: openAIVoice,
+                                              model: openAIModel, speed: speed)
+                    data = try await client.synthesize(text: sample)
+                case .kokoro:
+                    guard kokoro.status == .running else {
+                        status = "Start the Kokoro server to preview."
+                        isPreviewing = false; return
+                    }
+                    let client = KokoroClient(baseURL: kokoro.baseURL, voice: kokoroVoice, speed: speed)
+                    data = try await client.synthesize(text: sample)
+                case .chatterbox:
+                    guard chatterbox.status == .running else {
+                        status = "Start the Chatterbox server to preview."
+                        isPreviewing = false; return
+                    }
+                    let client = ChatterboxClient(baseURL: chatterbox.baseURL,
+                                                  language: chatterboxLanguage,
+                                                  exaggeration: chatterboxExaggeration,
+                                                  cfgWeight: chatterboxCfgWeight)
+                    data = try await client.synthesize(text: sample)
+                }
+                self.audio.load(data: data)
+                self.status = "Voice preview"
+            } catch {
+                self.status = error.localizedDescription
+            }
+            self.isPreviewing = false
         }
     }
 

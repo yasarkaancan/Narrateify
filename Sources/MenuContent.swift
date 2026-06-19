@@ -47,24 +47,69 @@ struct MenuContent: View {
 
             // Accessory (LSUIElement) apps don't activate on their own, so the
             // Settings window would otherwise open hidden behind other apps —
-            // activate alongside SettingsLink so it comes to the front.
+            // activate alongside SettingsLink so it comes to the front. When the
+            // window is already open, highlight the row and point back to it.
             SettingsLink {
-                Label("Settings…", systemImage: "gearshape")
+                Label(state.settingsWindowOpen ? "Settings (open)" : "Settings…",
+                      systemImage: state.settingsWindowOpen ? "gearshape.fill" : "gearshape")
             }
+            .buttonStyle(MenuRowButtonStyle(highlighted: state.settingsWindowOpen))
             .simultaneousGesture(TapGesture().onEnded {
                 NSApp.activate(ignoringOtherApps: true)
             })
+            .animation(.snappy, value: state.settingsWindowOpen)
 
             Button(role: .destructive) {
                 NSApplication.shared.terminate(nil)
             } label: {
                 Label("Quit", systemImage: "power")
             }
+            .buttonStyle(MenuRowButtonStyle(destructive: true))
             .keyboardShortcut("q")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MenuRowButtonStyle())
         .padding(12)
         .frame(width: 250)
+    }
+}
+
+/// A menu-row button that highlights on hover (and can stay highlighted, e.g.
+/// to indicate the Settings window is already open). Gives the otherwise-static
+/// menu-bar panel some life.
+struct MenuRowButtonStyle: ButtonStyle {
+    var highlighted = false
+    var destructive = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        MenuRow(configuration: configuration, highlighted: highlighted, destructive: destructive)
+    }
+
+    private struct MenuRow: View {
+        let configuration: Configuration
+        let highlighted: Bool
+        let destructive: Bool
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            let tint: Color = destructive ? .red : .accentColor
+            let fill = hovering ? 0.22 : (highlighted ? 0.13 : 0.0)
+            configuration.label
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .foregroundStyle(destructive && hovering ? Color.red : Color.primary)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(tint.opacity(isEnabled ? fill : 0))
+                )
+                .contentShape(Rectangle())
+                .scaleEffect(configuration.isPressed ? 0.97 : 1)
+                .opacity(isEnabled ? 1 : 0.4)
+                .onHover { if isEnabled { hovering = $0 } }
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+        }
     }
 }
 

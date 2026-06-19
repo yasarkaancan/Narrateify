@@ -17,7 +17,9 @@ struct SettingsView: View {
             // Keep the "On disk" figures current whenever Settings opens.
             state.kokoro.refreshDiskUsage()
             state.chatterbox.refreshDiskUsage()
+            state.settingsWindowOpen = true
         }
+        .onDisappear { state.settingsWindowOpen = false }
     }
 }
 
@@ -72,6 +74,20 @@ struct ModelsView: View {
             }
 
             Section("Voice settings") {
+                HStack(spacing: 8) {
+                    Button { state.previewVoice() } label: {
+                        Label(state.isPreviewing ? "Previewing…" : "Preview voice",
+                              systemImage: "play.circle")
+                    }
+                    .disabled(state.isPreviewing)
+                    if state.isPreviewing { ProgressView().controlSize(.small) }
+                    Spacer()
+                }
+                Text("Hear a short sample of the selected voice. "
+                     + "Local engines need their server running.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 switch state.provider {
                 case .elevenLabs:
                     slider("Speed", value: $state.speed, range: 0.7...1.2, suffix: "×")

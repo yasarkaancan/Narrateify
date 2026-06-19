@@ -31,8 +31,10 @@ engine of your choice: **ElevenLabs** or **OpenAI** in the cloud, or
   - **Chatterbox** (local) — expressive, multilingual (23 languages), free & offline.
 - **Floating overlay** that shows synthesis progress and turns into a draggable
   mini media player.
-- **History** with grouping, color-coding, sort, and filter — replay or reveal
-  any past narration.
+- **Voice previews** — audition the selected voice with one click before
+  narrating (free hosted samples for ElevenLabs; on-the-fly samples otherwise).
+- **History** with grouping, color-coding, sort, and filter — replay, **share**
+  (AirDrop/Messages/Mail/Files), or reveal any past narration.
 - **Local-model management** — install/uninstall from the UI, see exact disk
   usage and a performance profile, and auto-start your last-used local server
   at launch.

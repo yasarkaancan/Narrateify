@@ -20,6 +20,8 @@ struct ElevenLabsClient {
         let voiceId: String
         let name: String
         let category: String?
+        /// A short hosted sample of the voice (used for free in-app previews).
+        let previewURL: URL?
 
         var id: String { voiceId }
 
@@ -27,6 +29,7 @@ struct ElevenLabsClient {
             case voiceId = "voice_id"
             case name
             case category
+            case previewURL = "preview_url"
         }
     }
 

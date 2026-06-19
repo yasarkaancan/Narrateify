@@ -377,6 +377,12 @@ struct HistoryRow: View {
                 } label: {
                     Label("Show File", systemImage: "folder")
                 }
+                ShareLink(item: history.fileURL(for: record),
+                          subject: Text("Narrateify recording"),
+                          preview: SharePreview(record.preview.isEmpty ? "Narration"
+                                                                       : record.preview)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
                 moveMenu
                 Button(role: .destructive) {
                     withAnimation(.snappy) { state.delete(record) }
