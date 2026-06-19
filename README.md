@@ -49,14 +49,8 @@ Grab the latest **`Narrateify.dmg`** from the
 [**Releases**](https://github.com/yasarkaancan/Narrateify/releases/latest) page,
 open it, and drag **Narrateify** into your **Applications** folder.
 
-> **First launch (one-time Gatekeeper step).** The app is open-source and
-> **ad-hoc signed**, not notarized by Apple, so macOS will warn the first time.
-> Either **right-click the app → Open → Open**, or run:
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/Narrateify.app
-> ```
-> After that it launches normally. (See the privacy section — the app is fully
-> open-source and you can build it yourself below.)
+The app and DMG are **Developer ID-signed and notarized by Apple**, so they
+launch with **no Gatekeeper warning** — just open and go.
 
 ---
 
