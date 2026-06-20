@@ -15,6 +15,11 @@ targets:
     info:
       path: Info.plist
       properties:
+        # Tie the bundle version to the build settings below, so bumping
+        # MARKETING_VERSION/CURRENT_PROJECT_VERSION is the single source of truth
+        # (XcodeGen otherwise rewrites these to hardcoded 1.0/1 on every generate).
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHumanReadableCopyright: "Copyright © 2026. All rights reserved."
