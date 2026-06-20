@@ -36,6 +36,8 @@ struct ModelsView: View {
 
     var body: some View {
         Form {
+            PresetsSection()
+
             Section("Provider") {
                 Picker("TTS engine", selection: $state.provider) {
                     ForEach(TTSProviderKind.allCases) { kind in
@@ -48,6 +50,8 @@ struct ModelsView: View {
             }
 
             switch state.provider {
+            case .appleTTS:
+                appleSection
             case .elevenLabs:
                 elevenLabsSection
                 Section("Billing estimate") {
@@ -93,7 +97,7 @@ struct ModelsView: View {
                     slider("Speed", value: $state.speed, range: 0.7...1.2, suffix: "×")
                     slider("Stability", value: $state.stability, range: 0...1)
                     slider("Similarity", value: $state.similarityBoost, range: 0...1)
-                case .openAI, .kokoro:
+                case .appleTTS, .openAI, .kokoro:
                     slider("Speed", value: $state.speed, range: 0.7...1.2, suffix: "×")
                 case .chatterbox:
                     slider("Exaggeration", value: $state.chatterboxExaggeration, range: 0...1)
@@ -110,6 +114,9 @@ struct ModelsView: View {
 
     private var providerBlurb: String {
         switch state.provider {
+        case .appleTTS:
+            return "Uses macOS's built-in on-device speech engine — free, offline, "
+                 + "and no API key."
         case .elevenLabs:
             return "Cloud synthesis via the ElevenLabs API. Requires an API key."
         case .openAI:
@@ -119,6 +126,30 @@ struct ModelsView: View {
         case .chatterbox:
             return "Runs Resemble AI's open-source Chatterbox model locally — "
                  + "free, offline, and multilingual (23 languages)."
+        }
+    }
+
+    // MARK: Apple (built-in)
+
+    private var appleSection: some View {
+        Section("Apple (built-in)") {
+            VoiceListPicker(items: AppleTTSClient.installedVoices().map {
+                                VoiceRowItem(id: $0.id, title: $0.name,
+                                             subtitle: $0.language, premium: $0.premium)
+                            },
+                            selection: $state.appleVoice,
+                            previewDisabled: state.isPreviewing) { id in
+                state.auditionApple(id)
+            }
+
+            Text("Runs entirely on-device — free, offline, and no API key. "
+                 + "Add more voices (including high-quality “Premium” ✦ ones) in "
+                 + "System Settings → Accessibility → Spoken Content → System Voice → "
+                 + "Manage Voices.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            infoLink(.appleTTS, "About macOS voices")
         }
     }
 
@@ -132,9 +163,14 @@ struct ModelsView: View {
             if state.voices.isEmpty {
                 TextField("Voice ID", text: $state.voiceId)
             } else {
-                Picker("Voice", selection: $state.voiceId) {
-                    ForEach(state.voices) { voice in
-                        Text(voice.name).tag(voice.voiceId)
+                VoiceListPicker(items: state.voices.map {
+                                    VoiceRowItem(id: $0.voiceId, title: $0.name,
+                                                 subtitle: $0.category)
+                                },
+                                selection: $state.voiceId,
+                                previewDisabled: state.isPreviewing) { id in
+                    if let v = state.voices.first(where: { $0.voiceId == id }) {
+                        state.auditionElevenLabs(v)
                     }
                 }
             }
@@ -424,6 +460,25 @@ struct GeneralView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Playback") {
+                Toggle("Stream playback (start sooner)", isOn: $state.streamPlayback)
+                Text("Begins playing as soon as the first part is ready, while the "
+                     + "rest is still being synthesized — great for long text. "
+                     + "Scrubbing is limited while streaming; the full recording is "
+                     + "still saved to History.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Clipboard") {
+                Toggle("Auto-narrate newly copied text", isOn: $state.clipboardWatch)
+                Text("When on, Narrateify watches the clipboard and reads anything "
+                     + "you copy. It pauses while narrating and skips repeats. Turn "
+                     + "off to use the ⌃⌥V hotkey on demand instead.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Overlay") {
                 Toggle("Show floating overlay", isOn: $state.overlayEnabled)
                 Toggle("Keep player floating after conversion", isOn: $state.keepPlayerVisible)
@@ -440,6 +495,8 @@ struct GeneralView: View {
             Section("Shortcuts") {
                 ShortcutsSettingsView()
             }
+
+            UsageSection()
 
             Section("About & Updates") {
                 LabeledContent("Version", value: state.updateChecker.currentVersion)
@@ -475,10 +532,27 @@ struct GeneralView: View {
         case .upToDate:
             Label("You're up to date", systemImage: "checkmark.circle")
                 .foregroundStyle(.green)
-        case .available(let version, let url):
-            Link(destination: url) {
-                Label("Update available: \(version)", systemImage: "arrow.down.circle.fill")
-                    .foregroundStyle(.blue)
+        case .available(let version, let url, let download):
+            VStack(alignment: .leading, spacing: 6) {
+                Link(destination: url) {
+                    Label("Update available: \(version)", systemImage: "arrow.down.circle.fill")
+                        .foregroundStyle(.blue)
+                }
+                if download != nil {
+                    Button {
+                        Task { await state.updateChecker.downloadAndOpen() }
+                    } label: {
+                        if state.updateChecker.isDownloading {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Downloading…")
+                            }
+                        } else {
+                            Label("Download & Install", systemImage: "square.and.arrow.down")
+                        }
+                    }
+                    .disabled(state.updateChecker.isDownloading)
+                }
             }
         case .failed(let message):
             Label("Check failed: \(message)", systemImage: "exclamationmark.triangle")

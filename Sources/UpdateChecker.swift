@@ -15,11 +15,15 @@ final class UpdateChecker: ObservableObject {
         case idle
         case checking
         case upToDate
-        case available(version: String, url: URL)
+        case available(version: String, url: URL, download: URL?)
         case failed(String)
     }
 
     @Published private(set) var state: State = .idle
+    /// True while the release DMG is downloading.
+    @Published private(set) var isDownloading = false
+    /// The latest release's `.dmg` asset, if any (set by `check`).
+    private(set) var pendingDownload: URL?
 
     /// The running app's marketing version, e.g. "1.0".
     var currentVersion: String {
@@ -31,6 +35,12 @@ final class UpdateChecker: ObservableObject {
         let html_url: String
         let prerelease: Bool
         let draft: Bool
+        let assets: [Asset]
+
+        struct Asset: Decodable {
+            let name: String
+            let browser_download_url: String
+        }
     }
 
     /// Queries the latest release and updates `state`. Safe to call repeatedly.
@@ -59,8 +69,13 @@ final class UpdateChecker: ObservableObject {
             let latest = release.tag_name
             if Self.isNewer(latest, than: currentVersion),
                let link = URL(string: release.html_url) {
-                state = .available(version: Self.normalize(latest), url: link)
+                let dmg = release.assets
+                    .first { $0.name.lowercased().hasSuffix(".dmg") }
+                    .flatMap { URL(string: $0.browser_download_url) }
+                pendingDownload = dmg
+                state = .available(version: Self.normalize(latest), url: link, download: dmg)
             } else {
+                pendingDownload = nil
                 state = .upToDate
             }
         } catch {
@@ -68,15 +83,34 @@ final class UpdateChecker: ObservableObject {
         }
     }
 
+    /// Downloads the release DMG and opens it (mounting it in Finder) so the user
+    /// can drag the new app into Applications. A pragmatic, transparent
+    /// alternative to a silent self-updater.
+    func downloadAndOpen() async {
+        guard let url = pendingDownload, !isDownloading else { return }
+        isDownloading = true
+        defer { isDownloading = false }
+        do {
+            let (tmp, _) = try await URLSession.shared.download(from: url)
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: tmp, to: dest)
+            NSWorkspace.shared.open(dest)
+        } catch {
+            state = .failed("Download failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Strips a leading "v" and surrounding whitespace from a tag.
-    static func normalize(_ tag: String) -> String {
+    nonisolated static func normalize(_ tag: String) -> String {
         var s = tag.trimmingCharacters(in: .whitespaces)
         if s.hasPrefix("v") || s.hasPrefix("V") { s.removeFirst() }
         return s
     }
 
     /// Numeric, component-wise semver comparison ("1.10" > "1.9").
-    static func isNewer(_ tag: String, than current: String) -> Bool {
+    nonisolated static func isNewer(_ tag: String, than current: String) -> Bool {
         func parts(_ v: String) -> [Int] {
             normalize(v).split(separator: ".").map { Int($0) ?? 0 }
         }

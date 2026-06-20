@@ -4,8 +4,9 @@
 > screen region (via OCR), or the clipboard — with a global hotkey.
 
 Narrateify lives in your menu bar (no Dock icon) and speaks text using the TTS
-engine of your choice: **ElevenLabs** or **OpenAI** in the cloud, or
-**Kokoro** and **Chatterbox** running entirely **locally and free** on your Mac.
+engine of your choice: macOS's **built-in Apple voices** (zero setup),
+**ElevenLabs** or **OpenAI** in the cloud, or **Kokoro** and **Chatterbox**
+running entirely **locally and free** on your Mac.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)
@@ -21,20 +22,40 @@ engine of your choice: **ElevenLabs** or **OpenAI** in the cloud, or
   | `⌃⌥R` | Narrate the **currently selected text** (in any app) |
   | `⌃⌥S` | Drag-select a **screen region**, OCR it, and narrate the text |
   | `⌃⌥V` | Narrate whatever text is on the **clipboard** |
+  | `⌃⌥N` | Open **Quick Narrate** (type or paste text) |
+  | `⌃⌥Space` | Play / pause the current narration |
   | `⌃⌥X` | Stop playback |
 
   All shortcuts are **customizable** in *Settings → General → Shortcuts*.
-- **Four TTS engines**, switchable at any time:
+- **Five TTS engines**, switchable at any time:
+  - **Apple (built-in)** — macOS's on-device voices; free, offline, no API key,
+    nothing to install.
   - **ElevenLabs** (cloud) — premium voices, multilingual.
   - **OpenAI** (cloud) — `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`.
   - **Kokoro-82M** (local) — fast, lightweight, free & offline.
   - **Chatterbox** (local) — expressive, multilingual (23 languages), free & offline.
+- **Quick Narrate** window (`⌃⌥N`) — type or paste text and narrate it directly.
+- **File narration** — narrate **PDF / txt / rtf / Markdown** files (one or
+  many), with a **reading queue** that plays items back-to-back.
+- **Streaming playback** *(optional)* — starts playing the first part while the
+  rest is still synthesizing, for long text.
 - **Floating overlay** that shows synthesis progress and turns into a draggable
-  mini media player.
-- **Voice previews** — audition the selected voice with one click before
-  narrating (free hosted samples for ElevenLabs; on-the-fly samples otherwise).
-- **History** with grouping, color-coding, sort, and filter — replay, **share**
-  (AirDrop/Messages/Mail/Files), or reveal any past narration.
+  mini media player, with an adjustable **playback speed** (0.75×–2×).
+- **Now Playing integration** — the **F7/F8 media keys** and Control Center
+  control play/pause/skip and show the current narration.
+- **Voice previews** — audition any voice with one click, right in the picker,
+  before selecting it (free hosted samples for ElevenLabs; on-the-fly otherwise).
+- **Voice presets** — save engine + voice + model + sliders as named presets and
+  switch in one click.
+- **Live highlighting** — read text in a reader window that highlights each word
+  as the Apple voice speaks it.
+- **Auto-narrate the clipboard** *(optional)* — reads anything you copy.
+- **History** with grouping, color-coding, sort, **search**, and filter — replay,
+  **share** (AirDrop/Messages/Mail/Files, with friendly filenames), or reveal any
+  past narration.
+- **Usage & cost dashboard** — today/month/all-time spend per engine, with an
+  optional monthly budget warning.
+- **First-run onboarding** that walks through permissions and the hotkeys.
 - **Local-model management** — install/uninstall from the UI, see exact disk
   usage and a performance profile, and auto-start your last-used local server
   at launch.
@@ -99,6 +120,14 @@ relaunch** (permission changes need a restart to take effect).
 
 Open **Settings** from the menu-bar panel → **Models**, pick a provider, and
 configure it. Each provider's page links to its official documentation.
+
+### Apple (built-in) — local, free, zero setup
+
+Pick **Apple (built-in)** and choose a **Voice**. It uses the same on-device
+speech engine as the rest of macOS — no API key, no install, no network. Add
+more voices (including high-quality **Premium** ✦ ones) in **System Settings →
+Accessibility → Spoken Content → System Voice → Manage Voices**; newly installed
+voices appear in the picker. This is the quickest way to start narrating.
 
 ### ElevenLabs (cloud)
 
@@ -178,6 +207,15 @@ In **Settings → General → Startup** you can **Launch at login** and
 | `TextCapture.swift` | Reads selected text by synthesizing `⌘C` |
 | `ScreenshotOCR.swift` | Native region capture + Vision OCR |
 | `TTSProvider.swift` | Provider protocol + OpenAI/Kokoro/Chatterbox clients |
+| `AppleTTS.swift` | Built-in on-device `AVSpeechSynthesizer` engine → WAV |
+| `QuickNarrate.swift` | Type/paste-to-narrate window |
+| `FileNarration.swift` | Document text extraction + reading-queue model |
+| `LiveReader.swift` | Word-highlighting reader (live Apple speech) |
+| `NowPlaying.swift` | Now Playing / media-key integration |
+| `Presets.swift` | Saved voice presets + their Settings section |
+| `Usage.swift` | Spend aggregation + the usage dashboard |
+| `Onboarding.swift` | First-run permissions/hotkeys wizard |
+| `VoiceListPicker.swift` | Selectable voice list with per-row preview |
 | `ElevenLabsClient.swift` | ElevenLabs TTS client + long-text chunking |
 | `ServiceProvider.swift` | "Narrate with Narrateify" macOS Services entry |
 | `KokoroServer.swift` / `ChatterboxServer.swift` | Local Python TTS servers (install/run/manage) |
@@ -201,6 +239,8 @@ Issues and pull requests are welcome. Because the Xcode project is generated:
    settings, then run `xcodegen generate`.
 2. Keep new source files in `Sources/` — they're picked up automatically.
 3. Build before submitting: `xcodebuild -project Narrateify.xcodeproj -scheme Narrateify build`.
+4. Run the tests: `xcodebuild -project Narrateify.xcodeproj -scheme Narrateify test`
+   (unit tests live in `Tests/`).
 
 ### Cutting a release (maintainers)
 
@@ -222,11 +262,11 @@ compares the running version against the latest release tag, so the tag
 - **Selection capture** uses the clipboard-copy trick (briefly overwrites the
   clipboard, works only where `⌘C` copies). A future version could read
   `kAXSelectedTextAttribute` via the Accessibility API and fall back to copy.
-- **Streaming:** chunks play sequentially with a small gap. The ElevenLabs
-  streaming endpoint + an `AVAudioEngine` scheduler would give gapless, faster
-  starts.
-- **Distribution:** to ship a notarized `.app`, codesign and notarize with a
-  Developer ID.
+- **Streaming:** an opt-in streaming mode (Settings → General → Playback) starts
+  playback while later chunks synthesize. Cross-chunk scrubbing is limited in
+  that mode; a true `AVAudioEngine` scheduler would make it gapless and seekable.
+- **Auto-update:** the app can download and open the latest release DMG, but does
+  not yet self-install silently (a Sparkle appcast would enable that).
 
 ---
 

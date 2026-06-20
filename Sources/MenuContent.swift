@@ -37,6 +37,33 @@ struct MenuContent: View {
             }
             .keyboardShortcut("v", modifiers: [.control, .option])
 
+            Button { state.showQuickNarrate() } label: {
+                Label("Quick Narrate…", systemImage: "text.bubble")
+            }
+            .keyboardShortcut("n", modifiers: [.control, .option])
+
+            Button { state.readClipboardHighlighted() } label: {
+                Label("Read Clipboard (Highlighted)", systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
+
+            Button { state.narrateFile() } label: {
+                Label("Narrate File…", systemImage: "doc.text")
+            }
+
+            if !state.queue.isEmpty {
+                HStack {
+                    Label("Queue: \(state.queue.count) waiting", systemImage: "list.bullet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear") { state.clearQueue() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+            }
+
             Button { state.stop() } label: {
                 Label("Stop", systemImage: "stop.fill")
             }
@@ -146,10 +173,41 @@ struct PlayerControls: View {
                 Button { state.audio.skip(by: 5) } label: {
                     Image(systemName: "goforward.5")
                 }
+                Spacer()
+                SpeedMenu().environmentObject(state)
             }
             .imageScale(.large)
             .buttonStyle(.borderless)
             .padding(.top, 2)
         }
+    }
+}
+
+/// A compact menu to pick playback speed (0.75×–2×). Applies live to the player.
+struct SpeedMenu: View {
+    @EnvironmentObject var state: AppState
+    private let rates: [Float] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+
+    var body: some View {
+        Menu {
+            ForEach(rates, id: \.self) { r in
+                Button {
+                    state.audio.rate = r
+                } label: {
+                    Label(format(r), systemImage: state.audio.rate == r ? "checkmark" : "")
+                }
+            }
+        } label: {
+            Text(format(state.audio.rate))
+                .font(.caption.monospacedDigit())
+                .frame(minWidth: 34)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Playback speed")
+    }
+
+    private func format(_ r: Float) -> String {
+        (r == r.rounded() ? String(format: "%.0f×", r) : String(format: "%.2g×", r))
     }
 }

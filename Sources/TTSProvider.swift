@@ -8,6 +8,7 @@ protocol TTSProvider {
 
 /// Which engine to use. Cloud (ElevenLabs / OpenAI) or local (Kokoro / Chatterbox).
 enum TTSProviderKind: String, CaseIterable, Identifiable {
+    case appleTTS
     case elevenLabs
     case openAI
     case kokoro
@@ -17,6 +18,7 @@ enum TTSProviderKind: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .appleTTS:   return "Apple (built-in)"
         case .elevenLabs: return "ElevenLabs (cloud)"
         case .openAI:     return "OpenAI (cloud)"
         case .kokoro:     return "Kokoro (local)"
@@ -27,6 +29,7 @@ enum TTSProviderKind: String, CaseIterable, Identifiable {
     /// Stored on each history record so the UI can show what produced it.
     var engineName: String {
         switch self {
+        case .appleTTS:   return "Apple (built-in)"
         case .elevenLabs: return "ElevenLabs"
         case .openAI:     return "OpenAI"
         case .kokoro:     return "Kokoro (local)"
@@ -37,6 +40,7 @@ enum TTSProviderKind: String, CaseIterable, Identifiable {
     /// Where to read more about the provider (shown as a link in its section).
     var infoURL: URL {
         switch self {
+        case .appleTTS:   return URL(string: "https://support.apple.com/guide/mac-help/change-the-voice-your-mac-uses-mchlp2290/mac")!
         case .elevenLabs: return URL(string: "https://elevenlabs.io")!
         case .openAI:     return URL(string: "https://platform.openai.com/docs/guides/text-to-speech")!
         case .kokoro:     return URL(string: "https://github.com/hexgrad/kokoro")!

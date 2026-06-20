@@ -104,6 +104,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case narrateSelection
     case narrateScreenshot
     case narrateClipboard
+    case quickNarrate
+    case togglePlayback
     case stop
 
     var id: String { rawValue }
@@ -113,6 +115,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .narrateSelection:  return "Narrate selection"
         case .narrateScreenshot: return "Narrate screenshot"
         case .narrateClipboard:  return "Narrate clipboard"
+        case .quickNarrate:      return "Quick Narrate window"
+        case .togglePlayback:    return "Play / pause"
         case .stop:              return "Stop playback"
         }
     }
@@ -124,6 +128,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .narrateSelection:  return Shortcut(keyCode: UInt32(kVK_ANSI_R), carbonModifiers: mods)
         case .narrateScreenshot: return Shortcut(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: mods)
         case .narrateClipboard:  return Shortcut(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: mods)
+        case .quickNarrate:      return Shortcut(keyCode: UInt32(kVK_ANSI_N), carbonModifiers: mods)
+        case .togglePlayback:    return Shortcut(keyCode: UInt32(kVK_Space), carbonModifiers: mods)
         case .stop:              return Shortcut(keyCode: UInt32(kVK_ANSI_X), carbonModifiers: mods)
         }
     }
@@ -136,6 +142,8 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .narrateSelection:  AppState.shared.narrateSelection()
         case .narrateScreenshot: AppState.shared.narrateScreenshot()
         case .narrateClipboard:  AppState.shared.narrateClipboard()
+        case .quickNarrate:      AppState.shared.showQuickNarrate()
+        case .togglePlayback:    AppState.shared.audio.togglePlayPause()
         case .stop:              AppState.shared.stop()
         }
     }

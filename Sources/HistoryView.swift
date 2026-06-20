@@ -28,6 +28,7 @@ struct HistoryView: View {
     @State private var collapsedGroups: Set<UUID> = []
     @State private var ungroupedCollapsed = false
     @State private var editingGroup: NarrationGroup?
+    @State private var searchText = ""
 
     private var history: NarrationHistory { state.history }
     private var sort: HistorySort { HistorySort(rawValue: sortRaw) ?? .newest }
@@ -92,6 +93,23 @@ struct HistoryView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
 
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .frame(width: 120)
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            .fixedSize()
+
             Spacer()
 
             Button {
@@ -129,6 +147,7 @@ struct HistoryView: View {
         .animation(.snappy, value: sortRaw)
         .animation(.snappy, value: filterProvider)
         .animation(.snappy, value: filterModel)
+        .animation(.snappy, value: searchText)
         .animation(.snappy, value: collapsedGroups)
         .animation(.snappy, value: ungroupedCollapsed)
     }
@@ -217,7 +236,9 @@ struct HistoryView: View {
 
     private func passesFilter(_ r: NarrationRecord) -> Bool {
         (filterProvider.isEmpty || r.engine == filterProvider) &&
-        (filterModel.isEmpty || r.modelId == filterModel)
+        (filterModel.isEmpty || r.modelId == filterModel) &&
+        (searchText.isEmpty || r.text.localizedCaseInsensitiveContains(searchText)
+                            || r.voiceName.localizedCaseInsensitiveContains(searchText))
     }
 
     private var distinctProviders: [String] {
@@ -377,7 +398,7 @@ struct HistoryRow: View {
                 } label: {
                     Label("Show File", systemImage: "folder")
                 }
-                ShareLink(item: history.fileURL(for: record),
+                ShareLink(item: history.exportURL(for: record),
                           subject: Text("Narrateify recording"),
                           preview: SharePreview(record.preview.isEmpty ? "Narration"
                                                                        : record.preview)) {

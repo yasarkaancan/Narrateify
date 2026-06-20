@@ -6,6 +6,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let serviceProvider = ServiceProvider()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // When the app is launched as the unit-test host, skip all the live
+        // setup (hotkeys, onboarding, network checks) — tests only need the types.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return
+        }
+
         // Run as a background "agent" — no Dock icon, no app menu.
         // (Setting LSUIElement = YES in Info.plist does the same at launch;
         //  this is a belt-and-suspenders fallback.)
@@ -17,7 +23,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSUpdateDynamicServices()
 
         registerHotKeys()
-        promptForAccessibilityIfNeeded()
+
+        // First launch: show the onboarding wizard (which handles the permission
+        // prompts). On later launches, just re-assert the Accessibility prompt.
+        if UserDefaults.standard.bool(forKey: OnboardingWindow.didOnboardKey) {
+            promptForAccessibilityIfNeeded()
+        } else {
+            Task { @MainActor in OnboardingWindow.showIfNeeded() }
+        }
 
         // If the last narration used an installed local model, bring its server
         // up now so it's ready to narrate immediately.

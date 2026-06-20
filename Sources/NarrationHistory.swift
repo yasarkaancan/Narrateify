@@ -141,6 +141,40 @@ final class NarrationHistory: ObservableObject {
         directory.appendingPathComponent(record.fileName)
     }
 
+    /// A temp copy of a recording's audio with a human-friendly filename
+    /// (e.g. "Narrateify 2026-06-20 — Hello there.mp3"), suitable for Share/Save
+    /// instead of the raw `<uuid>.mp3` on disk. Each record gets its own temp
+    /// subfolder so the visible name stays clean and the copy is reused across
+    /// renders. Falls back to the original URL if the copy fails.
+    func exportURL(for record: NarrationRecord) -> URL {
+        let src = fileURL(for: record)
+        let ext = (record.fileName as NSString).pathExtension
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Narrateify-Export/\(record.id.uuidString)", isDirectory: true)
+        let dest = dir.appendingPathComponent(friendlyExportName(for: record, ext: ext))
+        if FileManager.default.fileExists(atPath: dest.path) { return dest }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.copyItem(at: src, to: dest)
+        return FileManager.default.fileExists(atPath: dest.path) ? dest : src
+    }
+
+    private func friendlyExportName(for record: NarrationRecord, ext: String) -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        var words = record.text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if words.count > 40 {
+            words = String(words.prefix(40)).trimmingCharacters(in: .whitespaces)
+        }
+        // Strip characters that are illegal or awkward in filenames.
+        let illegal = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        words = String(words.unicodeScalars.filter { !illegal.contains($0) })
+        let base = words.isEmpty ? "Narrateify \(df.string(from: record.date))"
+                                 : "Narrateify \(df.string(from: record.date)) — \(words)"
+        return "\(base).\(ext.isEmpty ? "audio" : ext)"
+    }
+
     /// Writes the audio to disk and prepends a record. Returns the new record.
     /// `credits`/`estimatedCost` are supplied by the caller (0 for local engines).
     @discardableResult
