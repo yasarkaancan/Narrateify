@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import AppKit
+import AVFoundation
 import ServiceManagement
 
 /// Single source of truth. Holds settings (persisted in UserDefaults) and
@@ -94,6 +95,47 @@ final class AppState: ObservableObject {
     @Published var streamPlayback: Bool {
         didSet { UserDefaults.standard.set(streamPlayback, forKey: "streamPlayback") }
     }
+    /// Clean text before synthesis (strip markdown, expand abbreviations, tidy
+    /// URLs) so voices stop reading literal `**` and raw links.
+    @Published var cleanText: Bool {
+        didSet { UserDefaults.standard.set(cleanText, forKey: "cleanText") }
+    }
+    /// User "say X as Y" pronunciation overrides, applied before synthesis.
+    @Published var pronunciations: [PronunciationRule] {
+        didSet {
+            if let data = try? JSONEncoder().encode(pronunciations) {
+                UserDefaults.standard.set(data, forKey: "pronunciations")
+            }
+        }
+    }
+    /// Auto-pick a voice that matches the text's detected language (Apple voices
+    /// and Chatterbox languages). Off by default so an explicit voice choice is
+    /// respected unless the user opts in.
+    @Published var autoDetectLanguage: Bool {
+        didSet { UserDefaults.standard.set(autoDetectLanguage, forKey: "autoDetectLanguage") }
+    }
+    /// How aggressively to strip scientific-paper citation noise ([65], author-
+    /// year, reference lists) before synthesis.
+    @Published var citationMode: CitationCleanupMode {
+        didSet { UserDefaults.standard.set(citationMode.rawValue, forKey: "citationMode") }
+    }
+    /// Show the recognized text in an editable window before narrating a
+    /// screenshot, so OCR mistakes can be fixed first.
+    @Published var reviewScreenshotText: Bool {
+        didSet { UserDefaults.standard.set(reviewScreenshotText, forKey: "reviewScreenshotText") }
+    }
+    /// Maximum number of history recordings to keep (0 = unlimited). Older
+    /// recordings beyond this are pruned automatically.
+    @Published var historyLimit: Int {
+        didSet {
+            UserDefaults.standard.set(historyLimit, forKey: "historyLimit")
+            history.prune(maxItems: historyLimit)
+        }
+    }
+    /// Store WAV-engine output (Apple/Kokoro/Chatterbox) as compressed m4a.
+    @Published var compressAudio: Bool {
+        didSet { UserDefaults.standard.set(compressAudio, forKey: "compressAudio") }
+    }
     // OpenAI (cloud) settings.
     @Published var openAIKey: String {
         didSet { Keychain.set(openAIKey, account: "openAIKey") }
@@ -127,6 +169,8 @@ final class AppState: ObservableObject {
     @Published var settingsWindowOpen = false
     /// Pending reading-queue items (played back-to-back after the current one).
     @Published var queue: [QueueItem] = []
+    /// When set, playback auto-pauses at this time (sleep timer).
+    @Published private(set) var sleepTimerEnds: Date?
     /// Voices fetched from the ElevenLabs API (not persisted).
     @Published var voices: [ElevenLabsClient.Voice] = []
     @Published var voicesStatus: String = ""
@@ -175,6 +219,14 @@ final class AppState: ObservableObject {
             .flatMap { try? JSONDecoder().decode([VoicePreset].self, from: $0) } ?? []
         monthlyBudget = d.object(forKey: "monthlyBudget") as? Double ?? 0
         streamPlayback = d.object(forKey: "streamPlayback") as? Bool ?? false
+        cleanText = d.object(forKey: "cleanText") as? Bool ?? true
+        pronunciations = (d.data(forKey: "pronunciations"))
+            .flatMap { try? JSONDecoder().decode([PronunciationRule].self, from: $0) } ?? []
+        autoDetectLanguage = d.object(forKey: "autoDetectLanguage") as? Bool ?? false
+        citationMode = CitationCleanupMode(rawValue: d.string(forKey: "citationMode") ?? "") ?? .smart
+        reviewScreenshotText = d.object(forKey: "reviewScreenshotText") as? Bool ?? true
+        historyLimit = d.object(forKey: "historyLimit") as? Int ?? 0
+        compressAudio = d.object(forKey: "compressAudio") as? Bool ?? false
         chatterboxLanguage = d.string(forKey: "chatterboxLanguage") ?? "en"
         chatterboxExaggeration = d.object(forKey: "chatterboxExaggeration") as? Double ?? 0.5
         chatterboxCfgWeight    = d.object(forKey: "chatterboxCfgWeight") as? Double ?? 0.5
@@ -250,6 +302,16 @@ final class AppState: ObservableObject {
         .init(stability: stability, similarityBoost: similarityBoost, speed: speed)
     }
 
+    /// Preprocessor built from the current settings. Pronunciation rules always
+    /// apply; the markdown/abbreviation/URL stages follow the `cleanText` toggle.
+    var textPreprocessor: TextPreprocessor {
+        TextPreprocessor(stripMarkdown: cleanText,
+                         expandAbbreviations: cleanText,
+                         simplifyURLs: cleanText,
+                         citationMode: citationMode,
+                         pronunciations: pronunciations)
+    }
+
     // MARK: Triggers
 
     func narrateSelection() {
@@ -279,7 +341,15 @@ final class AppState: ObservableObject {
                 self.status = "No text found (or capture cancelled)"
                 return
             }
-            self.narrate(trimmed)
+            // OCR is imperfect on dense papers — let the user review/fix the
+            // cleaned text before it's spoken (unless they've opted out).
+            if self.reviewScreenshotText {
+                let cleaned = self.textPreprocessor.process(trimmed)
+                self.status = "Review the recognized text"
+                TextReviewWindow.shared.show(text: cleaned, title: "Review Screenshot Text")
+            } else {
+                self.narrate(trimmed)
+            }
         }
     }
 
@@ -305,6 +375,28 @@ final class AppState: ObservableObject {
         QuickNarrateWindow.shared.show()
     }
 
+    /// Fetch a web page's readable text and narrate it (queues if busy).
+    func narrateURL(_ url: URL) {
+        status = "Fetching \(url.host ?? "page")…"
+        Task {
+            do {
+                let article = try await ArticleExtractor.fetch(url)
+                self.enqueue(article.text, title: article.title)
+            } catch {
+                self.status = error.localizedDescription
+            }
+        }
+    }
+
+    /// A bare http(s) URL (no surrounding text), suitable for article fetching.
+    nonisolated static func bareURL(in text: String) -> URL? {
+        let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.contains(where: { $0 == " " || $0 == "\n" || $0 == "\t" }),
+              s.lowercased().hasPrefix("http://") || s.lowercased().hasPrefix("https://"),
+              let url = URL(string: s), url.host != nil else { return nil }
+        return url
+    }
+
     // MARK: Reading queue
 
     /// Narrate text now if idle, otherwise add it to the queue.
@@ -320,6 +412,47 @@ final class AppState: ObservableObject {
     }
 
     func clearQueue() { queue.removeAll() }
+
+    /// Remove a single queued item.
+    func removeFromQueue(_ item: QueueItem) {
+        queue.removeAll { $0.id == item.id }
+    }
+
+    /// Reorder queued items (driven by the menu's drag handles).
+    func moveQueue(from offsets: IndexSet, to destination: Int) {
+        queue.move(fromOffsets: offsets, toOffset: destination)
+    }
+
+    // MARK: Sleep timer
+
+    private var sleepTimer: Timer?
+
+    /// Auto-pause playback (and stop advancing the queue) after `minutes`.
+    func startSleepTimer(minutes: Int) {
+        cancelSleepTimer()
+        guard minutes > 0 else { return }
+        let ends = Date().addingTimeInterval(TimeInterval(minutes) * 60)
+        sleepTimerEnds = ends
+        let t = Timer(timeInterval: TimeInterval(minutes) * 60, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.fireSleepTimer() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        sleepTimer = t
+    }
+
+    func cancelSleepTimer() {
+        sleepTimer?.invalidate()
+        sleepTimer = nil
+        sleepTimerEnds = nil
+    }
+
+    private func fireSleepTimer() {
+        sleepTimer = nil
+        sleepTimerEnds = nil
+        queue.removeAll()      // don't roll into the next queued item
+        audio.pause()
+        status = "Paused by sleep timer"
+    }
 
     private func playNextInQueue() {
         guard !queue.isEmpty else { return }
@@ -436,20 +569,48 @@ final class AppState: ObservableObject {
         suppressClipboardUntil = Date().addingTimeInterval(seconds)
     }
 
+    private var powerObserver: NSObjectProtocol?
+
     private func startClipboardWatch() {
-        lastClipboardChange = NSPasteboard.general.changeCount
+        // Suspend the poll loop in Low Power Mode to save battery; resume when it
+        // turns off. (Observe the power-state change once.)
+        if powerObserver == nil {
+            powerObserver = NotificationCenter.default.addObserver(
+                forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.reconcileClipboardWatch() }
+            }
+        }
+        reconcileClipboardWatch()
+    }
+
+    private func stopClipboardWatch() {
         clipboardTimer?.invalidate()
+        clipboardTimer = nil
+        if let powerObserver {
+            NotificationCenter.default.removeObserver(powerObserver)
+            self.powerObserver = nil
+        }
+    }
+
+    /// Start/stop the poll loop to match the watch setting and power state.
+    private func reconcileClipboardWatch() {
+        guard clipboardWatch else {
+            clipboardTimer?.invalidate(); clipboardTimer = nil
+            return
+        }
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            clipboardTimer?.invalidate(); clipboardTimer = nil
+            status = "Clipboard watch paused (Low Power Mode)"
+            return
+        }
+        guard clipboardTimer == nil else { return }
+        lastClipboardChange = NSPasteboard.general.changeCount
         let t = Timer(timeInterval: 0.6, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkClipboard() }
         }
         RunLoop.main.add(t, forMode: .common)
         clipboardTimer = t
         status = "Watching clipboard…"
-    }
-
-    private func stopClipboardWatch() {
-        clipboardTimer?.invalidate()
-        clipboardTimer = nil
     }
 
     private func checkClipboard() {
@@ -669,11 +830,50 @@ final class AppState: ObservableObject {
 
     // MARK: Pipeline
 
+    /// Synthesize one chunk, retrying once after a short backoff on transient
+    /// network errors (timeouts, dropped connections). Local-server "not running"
+    /// errors and HTTP failures aren't retried — a retry wouldn't help.
+    private func synthesize(_ client: TTSProvider, text: String, retries: Int = 1) async throws -> Data {
+        var attempt = 0
+        while true {
+            do {
+                return try await client.synthesize(text: text)
+            } catch {
+                attempt += 1
+                guard attempt <= retries, Self.isTransient(error) else { throw error }
+                let backoff = 0.8 * Double(attempt)
+                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+            }
+        }
+    }
+
+    /// Whether an error is a transient network condition worth retrying.
+    private static func isTransient(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .networkConnectionLost, .notConnectedToInternet,
+             .cannotConnectToHost, .dnsLookupFailed, .cannotFindHost:
+            return true
+        default:
+            return false
+        }
+    }
+
     func narrate(_ text: String) {
-        let chunks = TextChunker.chunk(text)
-        guard !chunks.isEmpty else { return }
-        // Remember what we're narrating so the clipboard watcher won't repeat it.
+        // Remember the raw text so the clipboard watcher won't repeat it, then
+        // clean it (markdown/URLs/abbreviations + pronunciation rules) before
+        // synthesis. `spoken` is what we actually voice, save, and bill.
         lastClipboardText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let spoken = textPreprocessor.process(text)
+        let chunks = TextChunker.chunk(spoken)
+        guard !chunks.isEmpty else { return }
+
+        // Optionally match the voice to the text's detected language. These are
+        // local overrides for this narration only — the user's saved selection
+        // is left untouched.
+        let autoBase = autoDetectLanguage ? LanguageDetector.detectBaseCode(spoken) : nil
+        let effectiveAppleVoice = appleVoiceMatching(autoBase) ?? appleVoice
+        let effectiveChatterboxLanguage = chatterboxLanguageMatching(autoBase) ?? chatterboxLanguage
 
         // Resolve the active engine and the metadata we'll record with it.
         let engine: TTSProviderKind = provider
@@ -687,9 +887,9 @@ final class AppState: ObservableObject {
 
         switch engine {
         case .appleTTS:
-            client = AppleTTSClient(voiceIdentifier: appleVoice, speed: speed)
-            voiceId = appleVoice
-            voiceName = AppleTTSClient.displayName(for: appleVoice)
+            client = AppleTTSClient(voiceIdentifier: effectiveAppleVoice, speed: speed)
+            voiceId = effectiveAppleVoice
+            voiceName = AppleTTSClient.displayName(for: effectiveAppleVoice)
             modelId = "apple-tts"
             credits = 0          // built-in + free
             cost = 0
@@ -700,7 +900,7 @@ final class AppState: ObservableObject {
             voiceId = self.voiceId
             voiceName = voices.first { $0.voiceId == self.voiceId }?.name ?? self.voiceId
             modelId = self.modelId
-            credits = Pricing.credits(characters: text.count, modelId: self.modelId)
+            credits = Pricing.credits(characters: spoken.count, modelId: self.modelId)
             cost = Pricing.cost(credits: credits, pricePerThousand: pricePerThousand)
             fileExtension = "mp3"
         case .openAI:
@@ -710,7 +910,7 @@ final class AppState: ObservableObject {
             voiceName = openAIVoice
             modelId = openAIModel
             credits = 0          // OpenAI bills per character, not credits
-            cost = Double(text.count) / 1000.0
+            cost = Double(spoken.count) / 1000.0
                  * OpenAIClient.pricePerThousand(model: openAIModel)
             fileExtension = "mp3"
         case .kokoro:
@@ -731,11 +931,11 @@ final class AppState: ObservableObject {
                 return
             }
             client = ChatterboxClient(baseURL: chatterbox.baseURL,
-                                      language: chatterboxLanguage,
+                                      language: effectiveChatterboxLanguage,
                                       exaggeration: chatterboxExaggeration,
                                       cfgWeight: chatterboxCfgWeight)
-            voiceId = chatterboxLanguage
-            voiceName = ChatterboxClient.languageName(chatterboxLanguage)
+            voiceId = effectiveChatterboxLanguage
+            voiceName = ChatterboxClient.languageName(effectiveChatterboxLanguage)
             modelId = "chatterbox-multilingual"
             credits = 0          // local + free
             cost = 0
@@ -755,11 +955,14 @@ final class AppState: ObservableObject {
 
         // Stream only when it helps: opted in and more than one chunk.
         let streaming = streamPlayback && chunks.count > 1
-        let title = String(text.prefix(80))
+        let title = String(spoken.prefix(80))
 
         Task {
             do {
-                var combined = Data()
+                // Collect each chunk's bytes so we can join them into one valid
+                // file. WAV chunks can't be naively concatenated (each carries its
+                // own header), so `AudioJoiner` PCM-merges them.
+                var parts: [Data] = []
 
                 if streaming {
                     // Start playing chunk 1 as soon as it's ready, enqueuing the
@@ -771,30 +974,51 @@ final class AppState: ObservableObject {
                     self.status = "Streaming…"
                     self.startNowPlaying(title.isEmpty ? "Narration" : title)
                     for (i, chunk) in chunks.enumerated() {
-                        let data = try await client.synthesize(text: chunk)
-                        combined.append(data)
+                        let data = try await self.synthesize(client, text: chunk)
+                        parts.append(data)
                         let url = dir.appendingPathComponent("chunk-\(i).\(fileExtension)")
                         try? data.write(to: url)
                         self.audio.enqueueStreaming(url: url)
                     }
                     self.status = "Playing"
                 } else {
-                    // Synthesize every chunk and concatenate into one file, so the
-                    // player can scrub/seek across the whole narration.
+                    // Synthesize every chunk so the player can scrub/seek across
+                    // the whole narration once joined.
                     for chunk in chunks {
-                        combined.append(try await client.synthesize(text: chunk))
+                        parts.append(try await self.synthesize(client, text: chunk))
                     }
                 }
 
-                let record = try self.history.save(audio: combined,
-                                                   text: text,
+                let combined = AudioJoiner.join(parts, fileExtension: fileExtension)
+
+                // gpt-4o-mini-tts bills by audio (not characters), so estimate it
+                // from the finished duration now that we have it. Character-billed
+                // models (ElevenLabs, tts-1*) keep their pre-synthesis estimate.
+                var finalCost = cost
+                if engine == .openAI, modelId == "gpt-4o-mini-tts" {
+                    let minutes = ((try? AVAudioPlayer(data: combined))?.duration ?? 0) / 60.0
+                    finalCost = minutes * OpenAIClient.pricePerMinute
+                }
+
+                // Optionally shrink uncompressed WAV output to AAC m4a for storage.
+                var audioData = combined
+                var storedExtension = fileExtension
+                if self.compressAudio, fileExtension == "wav",
+                   let compressed = await AudioCompressor.aacM4A(from: combined) {
+                    audioData = compressed
+                    storedExtension = "m4a"
+                }
+
+                let record = try self.history.save(audio: audioData,
+                                                   text: spoken,
                                                    engine: engine.engineName,
                                                    voiceId: voiceId,
                                                    voiceName: voiceName,
                                                    modelId: modelId,
                                                    credits: credits,
-                                                   estimatedCost: cost,
-                                                   fileExtension: fileExtension)
+                                                   estimatedCost: finalCost,
+                                                   fileExtension: storedExtension)
+                self.history.prune(maxItems: self.historyLimit)
                 if !streaming {
                     self.isSynthesizing = false
                     self.audio.load(url: self.history.fileURL(for: record))
@@ -811,6 +1035,26 @@ final class AppState: ObservableObject {
                 SynthesisOverlay.shared.hide()
             }
         }
+    }
+
+    /// Best installed Apple voice for the detected language `base` ("de"), or nil
+    /// to keep the current selection (already matching, unsupported, or no auto).
+    private func appleVoiceMatching(_ base: String?) -> String? {
+        guard let base else { return nil }
+        let voices = AppleTTSClient.installedVoices()
+        // Keep the current voice if it already speaks the language.
+        if let current = voices.first(where: { $0.id == appleVoice }),
+           current.language.lowercased().hasPrefix(base.lowercased()) {
+            return appleVoice
+        }
+        let matches = voices.filter { $0.language.lowercased().hasPrefix(base.lowercased()) }
+        return (matches.first { $0.premium } ?? matches.first)?.id
+    }
+
+    /// Chatterbox language code for the detected `base`, or nil to keep current.
+    private func chatterboxLanguageMatching(_ base: String?) -> String? {
+        guard let base else { return nil }
+        return ChatterboxClient.defaultVoices.contains(base) ? base : nil
     }
 
     /// Scratch directory for streamed chunk files.

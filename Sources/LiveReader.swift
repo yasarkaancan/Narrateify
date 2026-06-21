@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import NaturalLanguage
 
 /// Reads text aloud with Apple's engine while highlighting the current word —
 /// a "karaoke" reader. This uses live `AVSpeechSynthesizer.speak` (not the
@@ -104,9 +105,34 @@ final class ReaderWindow: NSObject, NSWindowDelegate {
     }
 }
 
-/// Renders the text with the spoken word highlighted, plus transport controls.
+/// Highlight palette for the live reader.
+enum ReaderHighlightColor: String, CaseIterable, Identifiable {
+    case accent, yellow, green, blue, pink, orange
+
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+    var color: Color {
+        switch self {
+        case .accent: return .accentColor
+        case .yellow: return .yellow
+        case .green:  return .green
+        case .blue:   return .blue
+        case .pink:   return .pink
+        case .orange: return .orange
+        }
+    }
+}
+
+/// Renders the text with the spoken word (or sentence) highlighted, plus
+/// transport controls.
 private struct ReaderView: View {
     @ObservedObject var reader: ReaderController
+    @AppStorage("readerSentenceHighlight") private var sentenceMode = false
+    @AppStorage("readerHighlightColor") private var colorRaw = ReaderHighlightColor.accent.rawValue
+
+    private var tint: Color {
+        (ReaderHighlightColor(rawValue: colorRaw) ?? .accent).color
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -121,7 +147,7 @@ private struct ReaderView: View {
 
             Divider()
 
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 Button { reader.toggle() } label: {
                     Image(systemName: reader.isPlaying ? "pause.fill" : "play.fill")
                         .frame(width: 16)
@@ -129,29 +155,70 @@ private struct ReaderView: View {
                 Button { reader.stop() } label: {
                     Image(systemName: "stop.fill")
                 }
+
+                Picker("", selection: $sentenceMode) {
+                    Text("Word").tag(false)
+                    Text("Sentence").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Highlight the current word or the whole sentence")
+
+                Menu {
+                    ForEach(ReaderHighlightColor.allCases) { c in
+                        Button {
+                            colorRaw = c.rawValue
+                        } label: {
+                            Label(c.label, systemImage: colorRaw == c.rawValue ? "checkmark" : "circle.fill")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "paintpalette")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Highlight color")
+
                 Spacer()
-                Text("Highlighting follows the Apple voice as it reads.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .imageScale(.large)
             .buttonStyle(.borderless)
             .padding(14)
         }
-        .frame(minWidth: 380, minHeight: 320)
+        .frame(minWidth: 420, minHeight: 320)
     }
 
-    /// Builds the displayed string with the current word emphasized.
+    /// Builds the displayed string with the current word — or its whole
+    /// sentence — emphasized.
     private var attributed: AttributedString {
         var attr = AttributedString(reader.text)
-        guard let hr = reader.highlight,
-              let swiftRange = Range(hr, in: reader.text),
+        guard let word = reader.highlight else { return attr }
+        let target = sentenceMode ? sentenceRange(containing: word) : word
+        guard let swiftRange = Range(target, in: reader.text),
               let lo = AttributedString.Index(swiftRange.lowerBound, within: attr),
               let hi = AttributedString.Index(swiftRange.upperBound, within: attr)
         else { return attr }
-        attr[lo..<hi].backgroundColor = .accentColor.opacity(0.35)
+        attr[lo..<hi].backgroundColor = tint.opacity(0.35)
         attr[lo..<hi].foregroundColor = .primary
         attr[lo..<hi].font = .title3.bold()
         return attr
+    }
+
+    /// The sentence range that contains the given word range.
+    private func sentenceRange(containing word: NSRange) -> NSRange {
+        let text = reader.text
+        guard let wordRange = Range(word, in: text) else { return word }
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = text
+        var result = word
+        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
+            if range.contains(wordRange.lowerBound) || range.lowerBound == wordRange.lowerBound {
+                result = NSRange(range, in: text)
+                return false
+            }
+            return true
+        }
+        return result
     }
 }

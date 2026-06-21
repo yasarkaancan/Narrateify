@@ -51,18 +51,10 @@ struct MenuContent: View {
             }
 
             if !state.queue.isEmpty {
-                HStack {
-                    Label("Queue: \(state.queue.count) waiting", systemImage: "list.bullet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Clear") { state.clearQueue() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
+                QueueSection().environmentObject(state)
             }
+
+            SleepTimerMenu().environmentObject(state)
 
             Button { state.stop() } label: {
                 Label("Stop", systemImage: "stop.fill")
@@ -137,6 +129,77 @@ struct MenuRowButtonStyle: ButtonStyle {
                 .animation(.easeOut(duration: 0.12), value: hovering)
                 .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
         }
+    }
+}
+
+/// The reading queue: each waiting item with reorder (▲▼) and remove (✕)
+/// controls, plus a Clear-all action.
+struct QueueSection: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Label("Queue: \(state.queue.count) waiting", systemImage: "list.bullet")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") { state.clearQueue() }
+                    .buttonStyle(.borderless).font(.caption)
+            }
+            ForEach(Array(state.queue.enumerated()), id: \.element.id) { index, item in
+                HStack(spacing: 6) {
+                    Text(item.title)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Button { state.moveQueue(from: [index], to: index - 1) } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .disabled(index == 0)
+                    Button { state.moveQueue(from: [index], to: index + 2) } label: {
+                        Image(systemName: "arrow.down")
+                    }
+                    .disabled(index == state.queue.count - 1)
+                    Button { state.removeFromQueue(item) } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+    }
+}
+
+/// A menu to set a sleep timer (auto-pause after N minutes). Shows the remaining
+/// time once armed.
+struct SleepTimerMenu: View {
+    @EnvironmentObject var state: AppState
+    private let options = [5, 10, 15, 30, 45, 60]
+
+    var body: some View {
+        Menu {
+            if state.sleepTimerEnds != nil {
+                Button("Turn Off") { state.cancelSleepTimer() }
+                Divider()
+            }
+            ForEach(options, id: \.self) { m in
+                Button("\(m) minutes") { state.startSleepTimer(minutes: m) }
+            }
+        } label: {
+            Label(sleepLabel, systemImage: "moon.zzz")
+        }
+        .menuStyle(.borderlessButton)
+    }
+
+    private var sleepLabel: String {
+        guard let ends = state.sleepTimerEnds else { return "Sleep Timer" }
+        let remaining = max(0, Int(ends.timeIntervalSinceNow.rounded()))
+        return "Sleep Timer — \(remaining / 60)m \(remaining % 60)s left"
     }
 }
 

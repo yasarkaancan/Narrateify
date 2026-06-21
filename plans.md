@@ -165,6 +165,84 @@ covered by unit tests (`Tests/LogicTests.swift`).
 
 ---
 
+## Part 1d — Reliability & refinement round (fourth round) ✅
+
+Fourteen items: one real bug fix, several "it read the wrong thing" fixes, and
+quality-of-life refinements. All build green; new logic helpers are unit-tested
+(`Tests/LogicTests.swift`, now 25 cases).
+
+1. **Multi-chunk WAV fix** *(bug)* — long text on the WAV engines (Apple/Kokoro/
+   Chatterbox) used to truncate to the first chunk, because raw WAV files were
+   naively concatenated (each carries its own header). `AudioJoiner` now PCM-merges
+   WAV chunks into one valid file; MP3 still concatenates. Files: `AudioJoiner.swift`,
+   `AppState.swift`.
+2. **Synthesis retry** — one automatic retry with backoff on transient network
+   errors (timeouts/dropped connections); local "not running" and HTTP errors
+   aren't retried. Files: `AppState.swift`.
+3. **Text preprocessing** — strips markdown, reads URLs as just their host, and
+   expands abbreviations ("e.g."→"for example") before synthesis (toggle in
+   *General → Text*). Files: `TextPreprocessor.swift`, `AppState.swift`, `SettingsView.swift`.
+4. **Pronunciation rules** — user "say X as Y" overrides (whole-word or substring)
+   applied before synthesis. Files: `TextPreprocessor.swift`, `SettingsView.swift`.
+5. **Auto-detect language → voice** — `NLLanguageRecognizer` picks a matching
+   Apple voice / Chatterbox language for this narration without changing the saved
+   selection (opt-in). Files: `LanguageDetector.swift`, `AppState.swift`.
+6. **Read article from URL** — a bare URL in Quick Narrate is fetched and the
+   readable body extracted (`<article>`/`<main>`, scripts/nav stripped) and
+   narrated. Files: `ArticleExtractor.swift`, `AppState.swift`, `QuickNarrate.swift`.
+7. **Sleep timer** — auto-pause after 5–60 min from the menu, with remaining time.
+   Files: `AppState.swift`, `MenuContent.swift`.
+8. **Save As + batch group export** — per-recording "Save As…" and per-group
+   "Export Recordings…" with friendly, de-duplicated filenames. Files: `HistoryView.swift`.
+9. **Queue reorder & remove** — per-item ▲▼/✕ controls in the menu queue. Files:
+   `AppState.swift`, `MenuContent.swift`.
+10. **Cross-chunk streaming seek** — the stream player now tracks each chunk's
+    timeline and rebuilds the queue to scrub across any synthesized part. Files:
+    `AudioController.swift`.
+11. **OpenAI cost accuracy** — `gpt-4o-mini-tts` is now estimated from audio
+    minutes (it bills on tokens), not characters. Files: `TTSProvider.swift`, `AppState.swift`.
+12. **Clipboard-watch power guard** — the poll loop suspends in Low Power Mode and
+    resumes when it turns off. Files: `AppState.swift`.
+13. **History storage controls** — optional AAC/m4a compression for WAV-engine
+    recordings, and a "keep at most N" auto-prune. Files: `AudioCompressor.swift`,
+    `NarrationHistory.swift`, `AppState.swift`, `SettingsView.swift`.
+14. **Live reader enhancements** — word/sentence highlight toggle and a highlight
+    color picker. Files: `LiveReader.swift`.
+15. **Localization infrastructure** — SwiftUI `LocalizedStringKey` tables
+    (`en` + Turkish `tr`) wired through XcodeGen; menu/tab/action labels translate
+    with no view-code changes. Files: `Sources/Resources/{en,tr}.lproj/Localizable.strings`,
+    `project.yml`.
+
+---
+
+## Part 1e — Scientific-paper narration ✅
+
+Narrating papers (especially via screenshot) was noisy: in-text citations read as
+"bracket sixty-five", and OCR scrambled two-column layouts. Fixed in three layers.
+
+- **Citation cleanup** *(TextPreprocessor.swift)* — a 3-way **Off / Smart /
+  Aggressive** mode (default Smart). Smart strips numeric citations (`[65]`,
+  `[65, 66]`, `[70–72]`, chained `[65][66]`), re-joins hyphenated line breaks,
+  expands `Fig./Eq./Tab./Sec.`, removes DOIs, and repairs the punctuation/spacing
+  left behind. Aggressive also strips `(Author, 2020)` citations, reads `et al.`
+  aloud, and trims a trailing References/Bibliography section. Applies to every
+  input path (selection, clipboard, file, screenshot).
+- **Geometry-aware OCR** *(OCRLayout.swift, ScreenshotOCR.swift)* — Vision output
+  is reconstructed into true reading order: detects 1 vs 2 columns via the gutter,
+  emits header → left column → right column → footer, drops low-confidence specks
+  and pure margin/page numbers, and raises `minimumTextHeight`. The ordering is a
+  pure, unit-tested function.
+- **Screenshot review panel** *(QuickNarrate.swift, AppState.swift)* — after
+  capture, the cleaned + reordered text opens in an editable window (reusing the
+  Quick Narrate editor) so OCR mistakes can be fixed before narration. Toggle in
+  *Settings → General → Screenshot* (default on).
+
+Settings: *General → Text* (Academic citation cleanup mode) and *General →
+Screenshot* (review toggle). Unit tests cover every transform and the column
+reading-order logic (`Tests/LogicTests.swift`, now 36 cases).
+
+---
+
 ## Part 2 — Recommended next features
 
 Each item lists **what**, **why**, **approach**, and rough **effort** (S/M/L).

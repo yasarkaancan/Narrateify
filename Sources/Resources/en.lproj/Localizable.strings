@@ -1,0 +1,47 @@
+/* Narrateify — base (English) localization.
+   SwiftUI Text/Label/Button titles are LocalizedStringKeys, so these keys are
+   the on-screen English strings; other .lproj files translate the values. */
+
+// Menu
+"Narrate Selected Text" = "Narrate Selected Text";
+"Narrate Screenshot" = "Narrate Screenshot";
+"Narrate Clipboard Text" = "Narrate Clipboard Text";
+"Quick Narrate…" = "Quick Narrate…";
+"Read Clipboard (Highlighted)" = "Read Clipboard (Highlighted)";
+"Narrate File…" = "Narrate File…";
+"Stop" = "Stop";
+"Clear" = "Clear";
+"Sleep Timer" = "Sleep Timer";
+"Turn Off" = "Turn Off";
+"Settings…" = "Settings…";
+"Settings (open)" = "Settings (open)";
+"Quit" = "Quit";
+
+// Settings tabs
+"Models" = "Models";
+"General" = "General";
+"History" = "History";
+
+// Common actions
+"Play" = "Play";
+"Share" = "Share";
+"Save As…" = "Save As…";
+"Delete" = "Delete";
+"Cancel" = "Cancel";
+"Save" = "Save";
+"Add" = "Add";
+"Show File" = "Show File";
+"Move" = "Move";
+"New Group" = "New Group";
+"Reveal Folder" = "Reveal Folder";
+"Check Now" = "Check Now";
+
+// Quick Narrate
+"Quick Narrate" = "Quick Narrate";
+"Paste" = "Paste";
+"Read" = "Read";
+"Narrate" = "Narrate";
+
+// Reader
+"Word" = "Word";
+"Sentence" = "Sentence";

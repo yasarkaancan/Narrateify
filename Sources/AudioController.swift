@@ -34,6 +34,15 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var enqueuedTotal: TimeInterval = 0      // sum of all enqueued durations
     private var streamSealed = false                 // no more chunks coming
 
+    /// A synthesized chunk on disk and where it falls in the overall timeline —
+    /// kept so we can rebuild the queue to seek across chunk boundaries.
+    private struct StreamChunk {
+        let url: URL
+        let start: TimeInterval
+        let duration: TimeInterval
+    }
+    private var streamChunks: [StreamChunk] = []
+
     /// Load a finished audio file and (optionally) start playing.
     func load(url: URL, autoplay: Bool = true) {
         stop()
@@ -98,10 +107,20 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         stopTicker()
     }
 
-    /// Jump to an absolute time (clamped to the file). No-op while streaming
-    /// (cross-chunk seeking isn't supported in that mode).
+    /// Jump to an absolute time. In stream mode this rebuilds the queue from the
+    /// chunk containing `time` (clamped to what's been synthesized so far).
     func seek(to time: TimeInterval) {
-        guard !streaming, let player else { return }
+        if streaming {
+            guard !streamChunks.isEmpty else { return }
+            let maxTime = enqueuedTotal
+            let target = min(max(0, time), maxTime)
+            let index = streamChunks.lastIndex { $0.start <= target } ?? 0
+            rebuildStreamQueue(fromChunk: index,
+                               offset: target - streamChunks[index].start,
+                               play: isPlaying)
+            return
+        }
+        guard let player else { return }
         let clamped = min(max(0, time), player.duration)
         player.currentTime = clamped
         currentTime = clamped
@@ -109,7 +128,11 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     /// Skip relative to the current position, e.g. -5 / +5 seconds.
     func skip(by seconds: TimeInterval) {
-        guard !streaming, let player else { return }
+        if streaming {
+            seek(to: currentTime + seconds)
+            return
+        }
+        guard let player else { return }
         seek(to: player.currentTime + seconds)
     }
 
@@ -130,6 +153,7 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         duration = 0
         finishedDuration = 0
         enqueuedTotal = 0
+        streamChunks = []
 
         let interval = CMTime(seconds: 0.2, preferredTimescale: 600)
         queueTimeObserver = q.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
@@ -165,22 +189,50 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard streaming, let q = queue else { return }
         let item = AVPlayerItem(url: url)
         let dur = CMTimeGetSeconds(item.asset.duration)
+        let start = enqueuedTotal
         if dur.isFinite, dur > 0 {
+            streamChunks.append(StreamChunk(url: url, start: start, duration: dur))
             enqueuedTotal += dur
             duration = enqueuedTotal
         }
+        observeEnd(of: item, duration: dur)
+        q.insert(item, after: q.items().last)
+        if q.rate == 0 {        // first chunk — start playing
+            q.rate = rate
+            isPlaying = true
+        }
+    }
+
+    /// When `item` finishes, credit its duration to the elapsed total.
+    private func observeEnd(of item: AVPlayerItem, duration dur: TimeInterval) {
         let observer = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
             guard let self else { return }
             if dur.isFinite, dur > 0 { self.finishedDuration += dur }
         }
         endObservers.append(observer)
+    }
 
-        q.insert(item, after: q.items().last)
-        if q.rate == 0 {        // first chunk — start playing
-            q.rate = rate
-            isPlaying = true
+    /// Rebuild the queue starting at chunk `index`, positioned `offset` seconds
+    /// into it — this is how we seek across chunk boundaries in stream mode.
+    private func rebuildStreamQueue(fromChunk index: Int, offset: TimeInterval, play: Bool) {
+        guard let q = queue, streamChunks.indices.contains(index) else { return }
+        q.removeAllItems()
+        for o in endObservers { NotificationCenter.default.removeObserver(o) }
+        endObservers.removeAll()
+        finishedDuration = streamChunks[index].start
+
+        for chunk in streamChunks[index...] {
+            let item = AVPlayerItem(url: chunk.url)
+            observeEnd(of: item, duration: chunk.duration)
+            q.insert(item, after: q.items().last)
         }
+        let clampedOffset = max(0, min(offset, streamChunks[index].duration))
+        q.currentItem?.seek(to: CMTime(seconds: clampedOffset, preferredTimescale: 600),
+                            completionHandler: nil)
+        q.rate = play ? rate : 0
+        isPlaying = play
+        currentTime = streamChunks[index].start + clampedOffset
     }
 
     private func teardownQueue() {
@@ -193,6 +245,7 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         streamSealed = false
         finishedDuration = 0
         enqueuedTotal = 0
+        streamChunks = []
     }
 
     // MARK: Position ticker

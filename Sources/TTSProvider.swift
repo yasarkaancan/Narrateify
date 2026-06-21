@@ -118,12 +118,19 @@ struct OpenAIClient: TTSProvider {
     ]
 
     /// Approximate USD per 1,000 characters, for the History cost estimate.
+    /// Used by the character-billed `tts-1*` models (and as a pre-synthesis
+    /// fallback for `gpt-4o-mini-tts`, which is reconciled to audio minutes once
+    /// the duration is known — see `pricePerMinute`).
     static func pricePerThousand(model: String) -> Double {
         switch model {
         case "tts-1-hd": return 0.030
-        default:         return 0.015   // tts-1 and gpt-4o-mini-tts (approx.)
+        default:         return 0.015
         }
     }
+
+    /// Approximate USD per minute of generated audio, for `gpt-4o-mini-tts`,
+    /// which bills on tokens (≈ audio duration) rather than input characters.
+    static let pricePerMinute = 0.015
 }
 
 /// Talks to the local Kokoro server (see `KokoroServer`) over its

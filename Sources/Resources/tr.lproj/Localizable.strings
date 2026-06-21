@@ -1,0 +1,45 @@
+/* Narrateify — Turkish (Türkçe) localization. */
+
+// Menu
+"Narrate Selected Text" = "Seçili Metni Seslendir";
+"Narrate Screenshot" = "Ekran Görüntüsünü Seslendir";
+"Narrate Clipboard Text" = "Pano Metnini Seslendir";
+"Quick Narrate…" = "Hızlı Seslendir…";
+"Read Clipboard (Highlighted)" = "Panoyu Oku (Vurgulu)";
+"Narrate File…" = "Dosyayı Seslendir…";
+"Stop" = "Durdur";
+"Clear" = "Temizle";
+"Sleep Timer" = "Uyku Zamanlayıcısı";
+"Turn Off" = "Kapat";
+"Settings…" = "Ayarlar…";
+"Settings (open)" = "Ayarlar (açık)";
+"Quit" = "Çık";
+
+// Settings tabs
+"Models" = "Modeller";
+"General" = "Genel";
+"History" = "Geçmiş";
+
+// Common actions
+"Play" = "Oynat";
+"Share" = "Paylaş";
+"Save As…" = "Farklı Kaydet…";
+"Delete" = "Sil";
+"Cancel" = "İptal";
+"Save" = "Kaydet";
+"Add" = "Ekle";
+"Show File" = "Dosyayı Göster";
+"Move" = "Taşı";
+"New Group" = "Yeni Grup";
+"Reveal Folder" = "Klasörü Göster";
+"Check Now" = "Şimdi Denetle";
+
+// Quick Narrate
+"Quick Narrate" = "Hızlı Seslendir";
+"Paste" = "Yapıştır";
+"Read" = "Oku";
+"Narrate" = "Seslendir";
+
+// Reader
+"Word" = "Sözcük";
+"Sentence" = "Cümle";

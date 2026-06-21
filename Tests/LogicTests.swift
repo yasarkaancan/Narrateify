@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 @testable import Narrateify
 
 /// Unit tests for the pure-logic helpers. These don't touch the UI or network.
@@ -105,5 +106,166 @@ final class LogicTests: XCTestCase {
         // barebones CI image there may be none, so only assert when some exist.
         guard !AppleTTSClient.installedVoices().isEmpty else { return }
         XCTAssertFalse(AppleTTSClient.defaultVoiceIdentifier().isEmpty)
+    }
+
+    // MARK: TextPreprocessor
+
+    func testPreprocessorStripsMarkdown() {
+        let p = TextPreprocessor()
+        let out = p.process("This is **bold** and _italic_ and a [link](https://example.com).")
+        XCTAssertFalse(out.contains("*"))
+        XCTAssertFalse(out.contains("_"))
+        XCTAssertTrue(out.contains("bold"))
+        XCTAssertTrue(out.contains("link"))
+        XCTAssertFalse(out.contains("https://"))
+    }
+
+    func testPreprocessorExpandsAbbreviations() {
+        let p = TextPreprocessor()
+        let out = p.process("Use a fast model, e.g. Flash.")
+        XCTAssertTrue(out.contains("for example"))
+        XCTAssertFalse(out.contains("e.g."))
+    }
+
+    func testPreprocessorSimplifiesURLs() {
+        XCTAssertEqual(TextPreprocessor.simplifyURLs(in: "see https://www.example.com/a/b?x=1 now"),
+                       "see example.com now")
+    }
+
+    func testPreprocessorCanDisableStages() {
+        // With cleanup off, markdown is left intact (only whitespace tidied).
+        let p = TextPreprocessor(stripMarkdown: false, expandAbbreviations: false,
+                                 simplifyURLs: false)
+        XCTAssertEqual(p.process("**keep** me"), "**keep** me")
+    }
+
+    func testPronunciationRuleWholeWord() {
+        let rule = PronunciationRule(from: "AI", to: "A.I.", wholeWord: true)
+        XCTAssertEqual(rule.apply(to: "AI and rain"), "A.I. and rain")  // "rain" untouched
+    }
+
+    func testPronunciationRulePartialMatch() {
+        let rule = PronunciationRule(from: "cat", to: "dog", wholeWord: false)
+        XCTAssertEqual(rule.apply(to: "category"), "dogegory")
+    }
+
+    // MARK: LanguageDetector
+
+    func testLanguageDetectionEnglishAndGerman() {
+        XCTAssertEqual(LanguageDetector.detectBaseCode("The quick brown fox jumps over the lazy dog."), "en")
+        XCTAssertEqual(LanguageDetector.detectBaseCode("Der schnelle braune Fuchs springt über den faulen Hund."), "de")
+    }
+
+    func testLanguageDetectionTooShortIsNil() {
+        XCTAssertNil(LanguageDetector.detectBaseCode("hi"))
+    }
+
+    // MARK: AudioJoiner
+
+    func testJoinSingleChunkReturnsItself() {
+        let data = Data([1, 2, 3])
+        XCTAssertEqual(AudioJoiner.join([data], fileExtension: "mp3"), data)
+    }
+
+    func testJoinMP3Concatenates() {
+        let a = Data([1, 2]); let b = Data([3, 4])
+        XCTAssertEqual(AudioJoiner.join([a, b], fileExtension: "mp3"), Data([1, 2, 3, 4]))
+    }
+
+    // MARK: Citation cleanup (scientific papers)
+
+    func testSmartRemovesNumericCitations() {
+        let out = TextPreprocessor.cleanCitations(
+            "The result [65] was confirmed [66, 67] and extended [70–72].", mode: .smart)
+        XCTAssertFalse(out.contains("["))
+        XCTAssertFalse(out.contains("]"))
+        XCTAssertTrue(out.contains("The result was confirmed and extended."))
+    }
+
+    func testSmartRemovesChainedCitations() {
+        let out = TextPreprocessor.cleanCitations("Prior work [65][66][67] shows this.", mode: .smart)
+        XCTAssertEqual(out, "Prior work shows this.")
+    }
+
+    func testSmartDeHyphenates() {
+        let out = TextPreprocessor.cleanCitations("infor-\nmation flow", mode: .smart)
+        XCTAssertTrue(out.contains("information flow"))
+    }
+
+    func testSmartExpandsReferenceAbbreviations() {
+        let out = TextPreprocessor.cleanCitations("As shown in Fig. 3 and Eq. 2.", mode: .smart)
+        XCTAssertTrue(out.contains("Figure 3"))
+        XCTAssertTrue(out.contains("Equation 2"))
+    }
+
+    func testSmartKeepsAuthorYear() {
+        // Smart mode must NOT touch author-year citations.
+        let out = TextPreprocessor.cleanCitations("As argued (Smith et al., 2020).", mode: .smart)
+        XCTAssertTrue(out.contains("Smith"))
+        XCTAssertTrue(out.contains("2020"))
+    }
+
+    func testAggressiveRemovesAuthorYear() {
+        let out = TextPreprocessor.cleanCitations(
+            "This holds (Smith et al., 2020; Jones 2019) generally.", mode: .aggressive)
+        XCTAssertFalse(out.contains("Smith"))
+        XCTAssertFalse(out.contains("2020"))
+        XCTAssertTrue(out.contains("This holds generally."))
+    }
+
+    func testAggressiveTrimsReferences() {
+        let text = "Body text here.\n\nReferences\n[1] A. Author, A paper, 2020."
+        let out = TextPreprocessor.cleanCitations(text, mode: .aggressive)
+        XCTAssertTrue(out.hasPrefix("Body text here."))
+        XCTAssertFalse(out.contains("A. Author"))
+    }
+
+    func testNoneLeavesTextUnchanged() {
+        let text = "Keep [65] this (Smith, 2020) intact."
+        XCTAssertEqual(TextPreprocessor.cleanCitations(text, mode: .none), text)
+    }
+
+    // MARK: OCR reading order
+
+    private func ocrLine(_ text: String, _ x: CGFloat, _ y: CGFloat,
+                         _ w: CGFloat = 0.3, conf: Float = 0.9) -> OCRLayout.Line {
+        OCRLayout.Line(text: text, box: CGRect(x: x, y: y, width: w, height: 0.04), confidence: conf)
+    }
+
+    func testOCRTwoColumnReadingOrder() {
+        // Left column (midX 0.25) should be read fully before the right (0.75).
+        let lines = [
+            ocrLine("right1", 0.6, 0.80), ocrLine("left1", 0.1, 0.80),
+            ocrLine("right2", 0.6, 0.70), ocrLine("left2", 0.1, 0.70),
+            ocrLine("right3", 0.6, 0.60), ocrLine("left3", 0.1, 0.60),
+        ]
+        let out = OCRLayout.orderedText(from: lines)
+        XCTAssertEqual(out, "left1\nleft2\nleft3\nright1\nright2\nright3")
+    }
+
+    func testOCRDropsLowConfidenceAndMarginNumbers() {
+        let lines = [
+            ocrLine("real text", 0.1, 0.8),
+            ocrLine("42", 0.02, 0.7),                 // margin line number
+            ocrLine("garbage", 0.1, 0.6, conf: 0.1),  // low confidence
+        ]
+        XCTAssertEqual(OCRLayout.orderedText(from: lines), "real text")
+    }
+
+    func testOCRSingleColumnTopToBottom() {
+        let lines = [
+            ocrLine("third", 0.1, 0.5), ocrLine("first", 0.1, 0.8), ocrLine("second", 0.1, 0.65),
+        ]
+        XCTAssertEqual(OCRLayout.orderedText(from: lines), "first\nsecond\nthird")
+    }
+
+    // MARK: AppState URL detection
+
+    func testBareURLDetection() {
+        XCTAssertNotNil(AppState.bareURL(in: "https://example.com/article"))
+        XCTAssertNotNil(AppState.bareURL(in: "  http://example.com  "))
+        XCTAssertNil(AppState.bareURL(in: "read this https://example.com please"))
+        XCTAssertNil(AppState.bareURL(in: "just some text"))
+        XCTAssertNil(AppState.bareURL(in: "ftp://example.com"))
     }
 }

@@ -219,6 +219,18 @@ final class NarrationHistory: ObservableObject {
         persist()
     }
 
+    /// Trim history to the newest `maxItems`, deleting the audio files of any
+    /// older recordings. `maxItems <= 0` means unlimited (no-op). Records are
+    /// stored newest-first, so we keep the prefix.
+    func prune(maxItems: Int) {
+        guard maxItems > 0, records.count > maxItems else { return }
+        for record in records[maxItems...] {
+            try? FileManager.default.removeItem(at: fileURL(for: record))
+        }
+        records.removeLast(records.count - maxItems)
+        persist()
+    }
+
     // MARK: Persistence
 
     private func load() {

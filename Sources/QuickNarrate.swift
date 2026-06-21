@@ -42,12 +42,52 @@ final class QuickNarrateWindow: NSObject, NSWindowDelegate {
     }
 }
 
+/// A review window that pre-fills the editor with text (e.g. cleaned screenshot
+/// OCR) so the user can fix it before narrating. A fresh window each time.
+@MainActor
+final class TextReviewWindow: NSObject, NSWindowDelegate {
+    static let shared = TextReviewWindow()
+    private var window: NSWindow?
+
+    func show(text: String, title: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        window?.close()
+
+        let hosting = NSHostingController(
+            rootView: QuickNarrateView(initialText: text, title: title,
+                                       onClose: { [weak self] in self?.window?.close() })
+                .environmentObject(AppState.shared)
+        )
+        let w = NSWindow(contentViewController: hosting)
+        w.title = title
+        w.styleMask = [.titled, .closable, .resizable]
+        w.isReleasedWhenClosed = false
+        w.delegate = self
+        w.setContentSize(NSSize(width: 480, height: 380))
+        w.center()
+        w.makeKeyAndOrderFront(nil)
+        window = w
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window = nil
+    }
+}
+
 /// The Quick Narrate panel contents.
 private struct QuickNarrateView: View {
     @EnvironmentObject var state: AppState
-    @State private var text = ""
+    @State private var text: String
     @FocusState private var focused: Bool
+    let title: String
     let onClose: () -> Void
+
+    init(initialText: String = "", title: String = "Quick Narrate",
+         onClose: @escaping () -> Void) {
+        _text = State(initialValue: initialText)
+        self.title = title
+        self.onClose = onClose
+    }
 
     private var trimmed: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -56,7 +96,7 @@ private struct QuickNarrateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Quick Narrate", systemImage: "text.bubble")
+                Label(title, systemImage: "text.bubble")
                     .font(.headline)
                 Spacer()
                 Text(state.provider.label)
@@ -76,7 +116,7 @@ private struct QuickNarrateView: View {
                     .overlay(RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(Color.secondary.opacity(0.25)))
                 if text.isEmpty {
-                    Text("Type or paste text to narrate…")
+                    Text("Type or paste text — or a URL to read the article…")
                         .foregroundStyle(.secondary)
                         .padding(.top, 14).padding(.leading, 12)
                         .allowsHitTesting(false)
@@ -116,7 +156,13 @@ private struct QuickNarrateView: View {
 
     private func narrate() {
         guard !trimmed.isEmpty else { return }
-        state.narrate(trimmed)
+        // A bare URL is fetched and read as an article; anything else is spoken
+        // directly.
+        if let url = AppState.bareURL(in: trimmed) {
+            state.narrateURL(url)
+        } else {
+            state.narrate(trimmed)
+        }
         onClose()
     }
 }

@@ -463,18 +463,60 @@ struct GeneralView: View {
             Section("Playback") {
                 Toggle("Stream playback (start sooner)", isOn: $state.streamPlayback)
                 Text("Begins playing as soon as the first part is ready, while the "
-                     + "rest is still being synthesized — great for long text. "
-                     + "Scrubbing is limited while streaming; the full recording is "
-                     + "still saved to History.")
+                     + "rest is still being synthesized — great for long text. You "
+                     + "can scrub across any part that's been synthesized so far, and "
+                     + "the full recording is still saved to History.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Text") {
+                Toggle("Clean text before speaking", isOn: $state.cleanText)
+                Text("Strips markdown (**, #, links), reads URLs as just their host, "
+                     + "and expands abbreviations like “e.g.” and “i.e.” so they're "
+                     + "spoken naturally.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Match voice to detected language", isOn: $state.autoDetectLanguage)
+                Text("Detects the language of the text and, for the Apple and "
+                     + "Chatterbox engines, narrates it with a matching voice — your "
+                     + "saved selection is left unchanged.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Academic citation cleanup", selection: $state.citationMode) {
+                    ForEach(CitationCleanupMode.allCases) { Text($0.label).tag($0) }
+                }
+                Text("For scientific papers. Smart removes in-text citations like "
+                     + "“[65]”, re-joins hyphenated line breaks, and expands Fig./Eq. "
+                     + "Aggressive also strips “(Author, 2020)” citations, reads "
+                     + "“et al.” aloud, and trims a trailing References section.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Screenshot") {
+                Toggle("Review recognized text before narrating",
+                       isOn: $state.reviewScreenshotText)
+                Text("After capturing a region, show the recognized and cleaned text "
+                     + "in an editable window so you can fix OCR mistakes before it's "
+                     + "spoken. Multi-column papers are reconstructed into reading "
+                     + "order automatically. Recommended for dense documents.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Pronunciations") {
+                PronunciationEditor()
             }
 
             Section("Clipboard") {
                 Toggle("Auto-narrate newly copied text", isOn: $state.clipboardWatch)
                 Text("When on, Narrateify watches the clipboard and reads anything "
-                     + "you copy. It pauses while narrating and skips repeats. Turn "
-                     + "off to use the ⌃⌥V hotkey on demand instead.")
+                     + "you copy. It pauses while narrating, skips repeats, and "
+                     + "suspends itself in Low Power Mode. Turn off to use the ⌃⌥V "
+                     + "hotkey on demand instead.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -490,6 +532,27 @@ struct GeneralView: View {
                     Spacer()
                     Button("Reset Position") { state.resetOverlayPosition() }
                 }
+            }
+
+            Section("Storage") {
+                Toggle("Compress saved recordings", isOn: $state.compressAudio)
+                Text("Stores Apple, Kokoro, and Chatterbox recordings as compressed "
+                     + "m4a instead of WAV — a fraction of the size, with no audible "
+                     + "difference. Cloud engines are already compressed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Keep at most", selection: $state.historyLimit) {
+                    Text("Unlimited").tag(0)
+                    Text("50 recordings").tag(50)
+                    Text("100 recordings").tag(100)
+                    Text("250 recordings").tag(250)
+                    Text("500 recordings").tag(500)
+                }
+                Text("Older recordings beyond this limit are removed automatically to "
+                     + "keep History tidy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Shortcuts") {
@@ -558,6 +621,57 @@ struct GeneralView: View {
             Label("Check failed: \(message)", systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
                 .font(.caption)
+        }
+    }
+}
+
+// MARK: - Pronunciation rules editor
+
+/// Lets the user add "say X as Y" overrides applied before synthesis.
+struct PronunciationEditor: View {
+    @EnvironmentObject var state: AppState
+    @State private var from = ""
+    @State private var to = ""
+
+    var body: some View {
+        if state.pronunciations.isEmpty {
+            Text("No rules yet. Add one to fix names or acronyms a voice mispronounces "
+                 + "(e.g. say “Narrateify” as “Narrate-i-fy”).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        ForEach($state.pronunciations) { $rule in
+            HStack(spacing: 6) {
+                TextField("Say", text: $rule.from)
+                Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                TextField("as", text: $rule.to)
+                Toggle("Whole word", isOn: $rule.wholeWord)
+                    .labelsHidden()
+                    .help("Match whole words only")
+                Button(role: .destructive) {
+                    state.pronunciations.removeAll { $0.id == rule.id }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+
+        HStack(spacing: 6) {
+            TextField("Say", text: $from)
+            Image(systemName: "arrow.right").foregroundStyle(.secondary)
+            TextField("as", text: $to)
+            Button {
+                let f = from.trimmingCharacters(in: .whitespacesAndNewlines)
+                let t = to.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !f.isEmpty, !t.isEmpty else { return }
+                state.pronunciations.append(PronunciationRule(from: f, to: t))
+                from = ""; to = ""
+            } label: {
+                Label("Add", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(.borderless)
         }
     }
 }

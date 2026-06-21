@@ -303,6 +303,10 @@ private struct GroupCardView: View {
                         }
                     }
                 } label: { Label("Color", systemImage: "paintpalette") }
+                Button { exportGroup() } label: {
+                    Label("Export Recordings…", systemImage: "square.and.arrow.up.on.square")
+                }
+                .disabled(records.isEmpty)
                 Divider()
                 Button(role: .destructive) {
                     withAnimation(.snappy) { state.history.deleteGroup(group.id) }
@@ -338,6 +342,35 @@ private struct GroupCardView: View {
     private func toggle() {
         if collapsed.contains(group.id) { collapsed.remove(group.id) }
         else { collapsed.insert(group.id) }
+    }
+
+    /// Export every recording in this group to a chosen folder, using the same
+    /// friendly filenames as Share/Save As (de-duplicated within the folder).
+    private func exportGroup() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.message = "Choose a folder to export “\(group.name)” into."
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+
+        var used = Set<String>()
+        for record in records {
+            let export = state.history.exportURL(for: record)
+            var name = export.lastPathComponent
+            // Avoid clobbering when two recordings produce the same friendly name.
+            if used.contains(name) {
+                let ext = (name as NSString).pathExtension
+                let base = (name as NSString).deletingPathExtension
+                name = "\(base) (\(record.id.uuidString.prefix(4))).\(ext)"
+            }
+            used.insert(name)
+            let dest = dir.appendingPathComponent(name)
+            try? FileManager.default.removeItem(at: dest)
+            try? FileManager.default.copyItem(at: export, to: dest)
+        }
     }
 }
 
@@ -404,6 +437,9 @@ struct HistoryRow: View {
                                                                        : record.preview)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
+                Button { saveAs() } label: {
+                    Label("Save As…", systemImage: "square.and.arrow.down")
+                }
                 moveMenu
                 Button(role: .destructive) {
                     withAnimation(.snappy) { state.delete(record) }
@@ -450,6 +486,18 @@ struct HistoryRow: View {
 
     private func label(_ systemImage: String, _ text: String) -> some View {
         Label(text, systemImage: systemImage)
+    }
+
+    /// Save a copy of this recording to a user-chosen location with a friendly,
+    /// editable filename.
+    private func saveAs() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = history.exportURL(for: record).lastPathComponent
+        panel.canCreateDirectories = true
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.copyItem(at: history.fileURL(for: record), to: dest)
     }
 }
 

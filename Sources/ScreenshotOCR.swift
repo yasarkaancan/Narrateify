@@ -45,13 +45,22 @@ enum ScreenshotOCR {
                 completion(nil)
                 return
             }
-            // Join the best candidate from each detected line.
-            let lines = observations.compactMap { $0.topCandidates(1).first?.string }
-            let text = lines.joined(separator: "\n")
+            // Keep each line's geometry + confidence so we can reconstruct the
+            // real reading order (columns, headers) instead of a naive top-down
+            // join — critical for two-column scientific papers.
+            let lines: [OCRLayout.Line] = observations.compactMap { obs in
+                guard let candidate = obs.topCandidates(1).first else { return nil }
+                return OCRLayout.Line(text: candidate.string,
+                                      box: obs.boundingBox,
+                                      confidence: candidate.confidence)
+            }
+            let text = OCRLayout.orderedText(from: lines)
             completion(text.isEmpty ? nil : text)
         }
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
+        // Let Vision pick the language and skip sub-pixel specks (figure noise).
+        request.minimumTextHeight = 0.012
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         try? handler.perform([request])
