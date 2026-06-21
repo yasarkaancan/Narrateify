@@ -45,3 +45,8 @@
 // Reader
 "Word" = "Word";
 "Sentence" = "Sentence";
+
+// Translation
+"Translation" = "Translation";
+"Translate before narrating" = "Translate before narrating";
+"Into" = "Into";

@@ -259,6 +259,45 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(OCRLayout.orderedText(from: lines), "first\nsecond\nthird")
     }
 
+    // MARK: Translator
+
+    func testTranslationLanguageCodesMatchVoiceBase() {
+        // Codes are the 2-letter base used by voice matching.
+        XCTAssertEqual(TranslationLanguage.german.rawValue, "de")
+        XCTAssertEqual(TranslationLanguage.turkish.rawValue, "tr")
+        XCTAssertEqual(TranslationLanguage.chinese.rawValue, "zh")
+        // Every case has a non-empty English name for the prompt.
+        for lang in TranslationLanguage.allCases {
+            XCTAssertFalse(lang.englishName.isEmpty)
+            XCTAssertFalse(lang.rawValue.isEmpty)
+        }
+    }
+
+    func testTranslatorSystemPromptNamesTarget() {
+        let prompt = Translator.systemPrompt(targetLanguageName: "Spanish")
+        XCTAssertTrue(prompt.contains("Spanish"))
+        XCTAssertTrue(prompt.lowercased().contains("only"))   // output-only instruction
+    }
+
+    func testTranslatorBlankTextReturnsUnchanged() async throws {
+        // Blank input short-circuits before any network/key check.
+        let t = Translator(apiKey: "", target: .french)
+        let out = try await t.translate("   \n  ")
+        XCTAssertEqual(out, "   \n  ")
+    }
+
+    func testTranslatorMissingKeyThrows() async {
+        let t = Translator(apiKey: "", target: .german)
+        do {
+            _ = try await t.translate("Hello world")
+            XCTFail("Expected missingKey error")
+        } catch let error as Translator.TranslateError {
+            if case .missingKey = error { } else { XCTFail("Wrong error: \(error)") }
+        } catch {
+            XCTFail("Wrong error type: \(error)")
+        }
+    }
+
     // MARK: AppState URL detection
 
     func testBareURLDetection() {

@@ -124,6 +124,15 @@ final class AppState: ObservableObject {
     @Published var reviewScreenshotText: Bool {
         didSet { UserDefaults.standard.set(reviewScreenshotText, forKey: "reviewScreenshotText") }
     }
+    /// Translate captured text into `translateLanguage` before synthesis (uses
+    /// the OpenAI key). Off by default — narration stays in the source language.
+    @Published var translateEnabled: Bool {
+        didSet { UserDefaults.standard.set(translateEnabled, forKey: "translateEnabled") }
+    }
+    /// Target language for the translate-before-narrate stage.
+    @Published var translateLanguage: TranslationLanguage {
+        didSet { UserDefaults.standard.set(translateLanguage.rawValue, forKey: "translateLanguage") }
+    }
     /// Maximum number of history recordings to keep (0 = unlimited). Older
     /// recordings beyond this are pruned automatically.
     @Published var historyLimit: Int {
@@ -225,6 +234,9 @@ final class AppState: ObservableObject {
         autoDetectLanguage = d.object(forKey: "autoDetectLanguage") as? Bool ?? false
         citationMode = CitationCleanupMode(rawValue: d.string(forKey: "citationMode") ?? "") ?? .smart
         reviewScreenshotText = d.object(forKey: "reviewScreenshotText") as? Bool ?? true
+        translateEnabled = d.object(forKey: "translateEnabled") as? Bool ?? false
+        translateLanguage = TranslationLanguage(rawValue: d.string(forKey: "translateLanguage") ?? "")
+            ?? .english
         historyLimit = d.object(forKey: "historyLimit") as? Int ?? 0
         compressAudio = d.object(forKey: "compressAudio") as? Bool ?? false
         chatterboxLanguage = d.string(forKey: "chatterboxLanguage") ?? "en"
@@ -868,10 +880,16 @@ final class AppState: ObservableObject {
         let chunks = TextChunker.chunk(spoken)
         guard !chunks.isEmpty else { return }
 
-        // Optionally match the voice to the text's detected language. These are
-        // local overrides for this narration only — the user's saved selection
-        // is left untouched.
-        let autoBase = autoDetectLanguage ? LanguageDetector.detectBaseCode(spoken) : nil
+        // Optionally match the voice to the language. When translating, the
+        // target language is known up front; otherwise detect it from the text
+        // (if the user opted in). These are local overrides for this narration
+        // only — the user's saved selection is left untouched.
+        let autoBase: String?
+        if translateEnabled {
+            autoBase = translateLanguage.rawValue
+        } else {
+            autoBase = autoDetectLanguage ? LanguageDetector.detectBaseCode(spoken) : nil
+        }
         let effectiveAppleVoice = appleVoiceMatching(autoBase) ?? appleVoice
         let effectiveChatterboxLanguage = chatterboxLanguageMatching(autoBase) ?? chatterboxLanguage
 
@@ -953,12 +971,46 @@ final class AppState: ObservableObject {
         isSynthesizing = true
         if overlayEnabled { SynthesisOverlay.shared.show() }
 
-        // Stream only when it helps: opted in and more than one chunk.
-        let streaming = streamPlayback && chunks.count > 1
-        let title = String(spoken.prefix(80))
-
         Task {
             do {
+                // Optionally translate into the target language before synthesis.
+                // Done here (async) so the UI stays responsive; the text was
+                // already cleaned above, so we translate `spoken`.
+                var spokenText = spoken
+                if self.translateEnabled {
+                    self.status = "Translating…"
+                    let translator = Translator(apiKey: self.openAIKey, target: self.translateLanguage)
+                    spokenText = try await translator.translate(spoken)
+                }
+                let workChunks = TextChunker.chunk(spokenText)
+                guard !workChunks.isEmpty else {
+                    self.isSynthesizing = false
+                    SynthesisOverlay.shared.hide()
+                    return
+                }
+
+                // Char-billed engines should bill the text actually sent, which
+                // translation can change in length; recompute their estimate.
+                var billedCredits = credits
+                var billedCost = cost
+                if self.translateEnabled {
+                    switch engine {
+                    case .elevenLabs:
+                        billedCredits = Pricing.credits(characters: spokenText.count, modelId: modelId)
+                        billedCost = Pricing.cost(credits: billedCredits,
+                                                  pricePerThousand: self.pricePerThousand)
+                    case .openAI where modelId != "gpt-4o-mini-tts":
+                        billedCost = Double(spokenText.count) / 1000.0
+                            * OpenAIClient.pricePerThousand(model: modelId)
+                    default:
+                        break
+                    }
+                }
+
+                // Stream only when it helps: opted in and more than one chunk.
+                let streaming = self.streamPlayback && workChunks.count > 1
+                let title = String(spokenText.prefix(80))
+
                 // Collect each chunk's bytes so we can join them into one valid
                 // file. WAV chunks can't be naively concatenated (each carries its
                 // own header), so `AudioJoiner` PCM-merges them.
@@ -973,7 +1025,7 @@ final class AppState: ObservableObject {
                     self.isSynthesizing = false
                     self.status = "Streaming…"
                     self.startNowPlaying(title.isEmpty ? "Narration" : title)
-                    for (i, chunk) in chunks.enumerated() {
+                    for (i, chunk) in workChunks.enumerated() {
                         let data = try await self.synthesize(client, text: chunk)
                         parts.append(data)
                         let url = dir.appendingPathComponent("chunk-\(i).\(fileExtension)")
@@ -984,7 +1036,7 @@ final class AppState: ObservableObject {
                 } else {
                     // Synthesize every chunk so the player can scrub/seek across
                     // the whole narration once joined.
-                    for chunk in chunks {
+                    for chunk in workChunks {
                         parts.append(try await self.synthesize(client, text: chunk))
                     }
                 }
@@ -994,7 +1046,7 @@ final class AppState: ObservableObject {
                 // gpt-4o-mini-tts bills by audio (not characters), so estimate it
                 // from the finished duration now that we have it. Character-billed
                 // models (ElevenLabs, tts-1*) keep their pre-synthesis estimate.
-                var finalCost = cost
+                var finalCost = billedCost
                 if engine == .openAI, modelId == "gpt-4o-mini-tts" {
                     let minutes = ((try? AVAudioPlayer(data: combined))?.duration ?? 0) / 60.0
                     finalCost = minutes * OpenAIClient.pricePerMinute
@@ -1010,12 +1062,12 @@ final class AppState: ObservableObject {
                 }
 
                 let record = try self.history.save(audio: audioData,
-                                                   text: spoken,
+                                                   text: spokenText,
                                                    engine: engine.engineName,
                                                    voiceId: voiceId,
                                                    voiceName: voiceName,
                                                    modelId: modelId,
-                                                   credits: credits,
+                                                   credits: billedCredits,
                                                    estimatedCost: finalCost,
                                                    fileExtension: storedExtension)
                 self.history.prune(maxItems: self.historyLimit)

@@ -43,3 +43,8 @@
 // Reader
 "Word" = "Sözcük";
 "Sentence" = "Cümle";
+
+// Translation
+"Translation" = "Çeviri";
+"Translate before narrating" = "Seslendirmeden önce çevir";
+"Into" = "Şu dile";

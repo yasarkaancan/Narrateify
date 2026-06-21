@@ -496,6 +496,21 @@ struct GeneralView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Translation") {
+                Toggle("Translate before narrating", isOn: $state.translateEnabled)
+                Picker("Into", selection: $state.translateLanguage) {
+                    ForEach(TranslationLanguage.allCases) { Text($0.label).tag($0) }
+                }
+                .disabled(!state.translateEnabled)
+                Text("Translates captured text — selected text or a screenshot — into "
+                     + "the chosen language before it's spoken, so you can listen in a "
+                     + "different language than the source. Uses your OpenAI key "
+                     + "(Settings → Models); a few cents per long article. When on, an "
+                     + "auto-matching voice follows the target language.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Screenshot") {
                 Toggle("Review recognized text before narrating",
                        isOn: $state.reviewScreenshotText)
