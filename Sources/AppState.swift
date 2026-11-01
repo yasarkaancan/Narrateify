@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import Combine
 import AppKit
@@ -308,6 +309,13 @@ final class AppState: ObservableObject {
                                                    isPlaying: audio.isPlaying,
                                                    duration: audio.duration)
     }
+    private var synthesisTask: Task<Void, Never>?
+    private var streamDirectory: URL?
+
+    private func removeStreamFiles() {
+        if let dir = streamDirectory { try? FileManager.default.removeItem(at: dir) }
+        streamDirectory = nil
+    }
     private var cancellables = Set<AnyCancellable>()
 
     private var voiceSettings: ElevenLabsClient.VoiceSettings {
@@ -376,7 +384,12 @@ final class AppState: ObservableObject {
     }
 
     func stop() {
+        synthesisTask?.cancel()
+        synthesisTask = nil
+        isSynthesizing = false
+        SynthesisOverlay.shared.hide()
         audio.stop()
+        removeStreamFiles()
         queue.removeAll()
         status = "Stopped"
         NowPlayingController.shared.clear()
@@ -473,6 +486,7 @@ final class AppState: ObservableObject {
     }
 
     private func handlePlaybackFinished() {
+        removeStreamFiles()
         if queue.isEmpty {
             NowPlayingController.shared.clear()
         } else {
@@ -791,6 +805,10 @@ final class AppState: ObservableObject {
 
     /// Re-play a previously saved narration from history.
     func play(_ record: NarrationRecord) {
+        synthesisTask?.cancel()
+        isSynthesizing = false
+        audio.stop()
+        removeStreamFiles()
         audio.load(url: history.fileURL(for: record))
         status = "Playing"
         startNowPlaying(record.preview.isEmpty ? "Narration" : record.preview)
@@ -810,7 +828,7 @@ final class AppState: ObservableObject {
 
     /// The overlay's "end" control: stop playback and dismiss the overlay.
     func endNarration() {
-        audio.stop()
+        stop()
         status = "Stopped"
         NowPlayingController.shared.clear()
         SynthesisOverlay.shared.hide()
@@ -848,13 +866,14 @@ final class AppState: ObservableObject {
     private func synthesize(_ client: TTSProvider, text: String, retries: Int = 1) async throws -> Data {
         var attempt = 0
         while true {
+            try Task.checkCancellation()
             do {
                 return try await client.synthesize(text: text)
             } catch {
                 attempt += 1
                 guard attempt <= retries, Self.isTransient(error) else { throw error }
                 let backoff = 0.8 * Double(attempt)
-                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
             }
         }
     }
@@ -963,7 +982,9 @@ final class AppState: ObservableObject {
         // Remember what we actually used, so we can auto-start it next launch.
         lastUsedProvider = engine
 
+        synthesisTask?.cancel()
         audio.stop()
+        removeStreamFiles()
         status = "Synthesizing…"
         // Slick floating indicator — visible whether narration was triggered by
         // a global hotkey or from the menu. It morphs into a media player once
@@ -971,7 +992,7 @@ final class AppState: ObservableObject {
         isSynthesizing = true
         if overlayEnabled { SynthesisOverlay.shared.show() }
 
-        Task {
+        synthesisTask = Task {
             do {
                 // Optionally translate into the target language before synthesis.
                 // Done here (async) so the UI stays responsive; the text was
@@ -982,7 +1003,10 @@ final class AppState: ObservableObject {
                     let translator = Translator(apiKey: self.openAIKey, target: self.translateLanguage)
                     spokenText = try await translator.translate(spoken)
                 }
-                let workChunks = TextChunker.chunk(spokenText)
+                try Task.checkCancellation()
+                let workChunks = engine == .kokoro && self.streamPlayback
+                    ? BufferedTextChunker.chunk(spokenText)
+                    : TextChunker.chunk(spokenText)
                 guard !workChunks.isEmpty else {
                     self.isSynthesizing = false
                     SynthesisOverlay.shared.hide()
@@ -1017,19 +1041,20 @@ final class AppState: ObservableObject {
                 var parts: [Data] = []
 
                 if streaming {
-                    // Start playing chunk 1 as soon as it's ready, enqueuing the
-                    // rest as they finish — while still building the combined file
-                    // for history.
-                    let dir = self.streamingTempDir(reset: true)
-                    self.audio.beginStreaming()
+                    // Buffer local speech before starting, then enqueue the rest
+                    // as it is generated while collecting the history file.
+                    let dir = self.streamingTempDir()
+                    self.streamDirectory = dir
+                    self.audio.beginStreaming(minimumBuffer: engine == .kokoro ? 18 : 0)
                     self.isSynthesizing = false
                     self.status = "Streaming…"
                     self.startNowPlaying(title.isEmpty ? "Narration" : title)
                     for (i, chunk) in workChunks.enumerated() {
                         let data = try await self.synthesize(client, text: chunk)
+                        try Task.checkCancellation()
                         parts.append(data)
                         let url = dir.appendingPathComponent("chunk-\(i).\(fileExtension)")
-                        try? data.write(to: url)
+                        try data.write(to: url)
                         self.audio.enqueueStreaming(url: url)
                     }
                     self.status = "Playing"
@@ -1037,7 +1062,9 @@ final class AppState: ObservableObject {
                     // Synthesize every chunk so the player can scrub/seek across
                     // the whole narration once joined.
                     for chunk in workChunks {
-                        parts.append(try await self.synthesize(client, text: chunk))
+                        let data = try await self.synthesize(client, text: chunk)
+                        try Task.checkCancellation()
+                        parts.append(data)
                     }
                 }
 
@@ -1061,6 +1088,7 @@ final class AppState: ObservableObject {
                     storedExtension = "m4a"
                 }
 
+                try Task.checkCancellation()
                 let record = try self.history.save(audio: audioData,
                                                    text: spokenText,
                                                    engine: engine.engineName,
@@ -1081,7 +1109,12 @@ final class AppState: ObservableObject {
                 if !(self.overlayEnabled && self.keepPlayerVisible) {
                     SynthesisOverlay.shared.hide()
                 }
+                // Sealing may synchronously advance the reading queue. Do this last.
+                if streaming { self.audio.sealStreaming() }
             } catch {
+                guard !Task.isCancelled else { return }
+                self.audio.stop()
+                self.removeStreamFiles()
                 self.isSynthesizing = false
                 self.status = error.localizedDescription
                 SynthesisOverlay.shared.hide()
@@ -1110,10 +1143,10 @@ final class AppState: ObservableObject {
     }
 
     /// Scratch directory for streamed chunk files.
-    private func streamingTempDir(reset: Bool = false) -> URL {
+    private func streamingTempDir() -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("Narrateify-Stream", isDirectory: true)
-        if reset { try? FileManager.default.removeItem(at: dir) }
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

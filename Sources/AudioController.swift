@@ -29,9 +29,13 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
     // Streaming (queue) mode plumbing.
     private var queue: AVQueuePlayer?
     private var queueTimeObserver: Any?
+    private var queueItemObserver: NSKeyValueObservation?
     private var endObservers: [NSObjectProtocol] = []
     private var finishedDuration: TimeInterval = 0   // durations of finished items
     private var enqueuedTotal: TimeInterval = 0      // sum of all enqueued durations
+    private var wantsPlayback = false
+    private var bufferStarted = false
+    private var minimumBuffer: TimeInterval = 0
     private var streamSealed = false                 // no more chunks coming
 
     /// A synthesized chunk on disk and where it falls in the overall timeline —
@@ -71,7 +75,8 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func play() {
         if streaming {
-            queue?.rate = rate
+            wantsPlayback = true
+            startIfBuffered()
             isPlaying = true
             return
         }
@@ -83,6 +88,7 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func pause() {
         if streaming {
+            wantsPlayback = false
             queue?.pause()
             isPlaying = false
             return
@@ -117,7 +123,7 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
             let index = streamChunks.lastIndex { $0.start <= target } ?? 0
             rebuildStreamQueue(fromChunk: index,
                                offset: target - streamChunks[index].start,
-                               play: isPlaying)
+                               play: wantsPlayback)
             return
         }
         guard let player else { return }
@@ -138,14 +144,23 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     // MARK: Streaming mode
 
-    /// Begin a streamed narration: playback starts as soon as the first chunk is
-    /// enqueued, while later chunks are still being synthesized.
-    func beginStreaming() {
+    /// Begin a streamed narration. Start after the requested audio reserve has
+    /// accumulated; continue synthesizing ahead while the queue plays.
+    func beginStreaming(minimumBuffer: TimeInterval = 0) {
         stop()
         let q = AVQueuePlayer()
         q.actionAtItemEnd = .advance
         queue = q
+        queueItemObserver = q.observe(\.currentItem, options: [.new]) { [weak self] observed, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.queue === observed else { return }
+                self.finishIfDrained()
+            }
+        }
         streaming = true
+        self.minimumBuffer = minimumBuffer
+        bufferStarted = false
+        wantsPlayback = true
         streamSealed = false
         hasAudio = true
         isPlaying = true
@@ -161,20 +176,13 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
             let cur = q.currentItem.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
             let t = self.finishedDuration + (cur.isFinite ? cur : 0)
             if self.currentTime != t { self.currentTime = t }
-            let playing = q.rate != 0 && q.currentItem != nil
+            let playing = self.wantsPlayback
             if self.isPlaying != playing { self.isPlaying = playing }
 
             // All chunks enqueued and the queue has drained → the narration is
             // done. (Before sealing, an empty queue just means we're waiting on
             // the next chunk to synthesize.)
-            if self.streamSealed, q.currentItem == nil {
-                let callback = self.onFinished
-                self.teardownQueue()
-                self.isPlaying = false
-                self.hasAudio = false
-                self.currentTime = self.duration
-                callback?()
-            }
+            self.finishIfDrained()
         }
     }
 
@@ -182,6 +190,8 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// narration is considered finished.
     func sealStreaming() {
         streamSealed = true
+        startIfBuffered()
+        finishIfDrained()
     }
 
     /// Append a freshly-synthesized chunk (written to `url`) to the stream.
@@ -197,18 +207,42 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
         observeEnd(of: item, duration: dur)
         q.insert(item, after: q.items().last)
-        if q.rate == 0 {        // first chunk — start playing
-            q.rate = rate
-            isPlaying = true
-        }
+        startIfBuffered()
+    }
+
+    /// Buffer actual audio duration, scaled for faster listening. Once started,
+    /// later chunks may resume a starved queue, but never override a user pause.
+    private func startIfBuffered() {
+        guard streaming, wantsPlayback, let q = queue, q.currentItem != nil else { return }
+        guard bufferStarted || streamSealed || enqueuedTotal >= minimumBuffer * Double(rate) else { return }
+        bufferStarted = true
+        q.rate = rate
+        isPlaying = true
+    }
+
+    private func finishIfDrained() {
+        guard streaming, streamSealed, queue?.currentItem == nil else { return }
+        let callback = onFinished
+        teardownQueue()
+        isPlaying = false
+        hasAudio = false
+        currentTime = duration
+        callback?()
     }
 
     /// When `item` finishes, credit its duration to the elapsed total.
     private func observeEnd(of item: AVPlayerItem, duration dur: TimeInterval) {
+        let expectedQueue = queue
         let observer = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            guard let self else { return }
+            guard let self, self.queue === expectedQueue else { return }
             if dur.isFinite, dur > 0 { self.finishedDuration += dur }
+            // AVQueuePlayer advances after this notification. An empty queue
+            // may stop periodic callbacks, so check on the next main run-loop.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.queue === expectedQueue else { return }
+                self.finishIfDrained()
+            }
         }
         endObservers.append(observer)
     }
@@ -230,12 +264,16 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let clampedOffset = max(0, min(offset, streamChunks[index].duration))
         q.currentItem?.seek(to: CMTime(seconds: clampedOffset, preferredTimescale: 600),
                             completionHandler: nil)
-        q.rate = play ? rate : 0
+        wantsPlayback = play
+        q.rate = 0
+        startIfBuffered()
         isPlaying = play
         currentTime = streamChunks[index].start + clampedOffset
     }
 
     private func teardownQueue() {
+        queueItemObserver?.invalidate()
+        queueItemObserver = nil
         if let obs = queueTimeObserver { queue?.removeTimeObserver(obs); queueTimeObserver = nil }
         for o in endObservers { NotificationCenter.default.removeObserver(o) }
         endObservers.removeAll()
