@@ -66,6 +66,8 @@ final class ChatterboxServer: ObservableObject {
         log = ""
         appendLog("Installing Chatterbox… this downloads PyTorch + model weights and can take several minutes.\n")
 
+        try? FileManager.default.removeItem(at: marker)
+
         do {
             try Self.serverScriptSource.write(to: serverScript, atomically: true, encoding: .utf8)
         } catch {
@@ -75,7 +77,7 @@ final class ChatterboxServer: ObservableObject {
 
         // PIP_USER=0 / PYTHONNOUSERSITE neutralize Anaconda/global pip configs
         // that force `--user`, which is illegal inside a virtualenv.
-        // Chatterbox was developed on Python 3.11; prefer it when available.
+        // Chatterbox was developed on Python 3.11; prefer it, accept 3.10–3.12.
         let script = """
         set -e
         export PIP_USER=0
@@ -84,9 +86,10 @@ final class ChatterboxServer: ObservableObject {
         export HF_HOME="\(baseDir.path)/hf"
         export TORCH_HOME="\(baseDir.path)/torch"
         cd "\(baseDir.path)"
-        PY="$(command -v python3.11 || command -v python3 || true)"
-        if [ -z "$PY" ]; then echo "ERROR: python3 not found on PATH"; exit 1; fi
-        echo "Using $($PY --version) at $PY"
+        \(LocalServerSupport.pythonResolverScript(baseDir: baseDir, versions: ["3.11", "3.12", "3.10"]))
+        # Start from a clean venv: a previous failed attempt may have left one
+        # built with an incompatible interpreter.
+        rm -rf venv
         "$PY" -m venv venv
         ./venv/bin/python -m pip install --upgrade pip
         ./venv/bin/python -m pip install chatterbox-tts soundfile
@@ -149,13 +152,25 @@ final class ChatterboxServer: ObservableObject {
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor in self?.appendLog(text) }
         }
-        p.terminationHandler = { [weak self] _ in
+        p.terminationHandler = { [weak self, weak p] proc in
+            let code = proc.terminationStatus
             Task { @MainActor in
                 guard let self else { return }
+                // A process we already stopped/replaced: just note it. Without
+                // this check, a late exit from the old server would mark a
+                // freshly restarted one as stopped.
+                guard let p, self.process === p else {
+                    self.appendLog("Chatterbox server stopped.\n")
+                    return
+                }
                 self.process = nil
-                // Don't clobber a load-failure status with a plain "stopped".
-                if case .failed = self.status {} else { self.status = .stopped }
-                self.appendLog("Chatterbox server stopped.\n")
+                if case .failed = self.status { return }   // keep the real error
+                if code != 0 || self.status == .starting {
+                    self.fail("Chatterbox server exited unexpectedly (code \(code)) — see the log above.")
+                } else {
+                    self.status = .stopped
+                    self.appendLog("Chatterbox server stopped.\n")
+                }
             }
         }
 

@@ -428,7 +428,10 @@ final class AppState: ObservableObject {
     func enqueue(_ text: String, title: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if audio.hasAudio || isSynthesizing {
+        // A finished narration stays loaded for replay, but isn't "busy" — only
+        // queue behind audio that is still playing or paused mid-way. (Queuing
+        // behind finished audio would strand the item: nothing advances it.)
+        if isSynthesizing || (audio.hasAudio && !audio.finished) {
             queue.append(QueueItem(title: title ?? String(trimmed.prefix(50)), text: trimmed))
             status = "Queued — \(queue.count) waiting"
         } else {
@@ -810,6 +813,10 @@ final class AppState: ObservableObject {
         audio.stop()
         removeStreamFiles()
         audio.load(url: history.fileURL(for: record))
+        guard audio.hasAudio else {
+            status = "Couldn't play that recording — its audio file is missing or unreadable."
+            return
+        }
         status = "Playing"
         startNowPlaying(record.preview.isEmpty ? "Narration" : record.preview)
     }

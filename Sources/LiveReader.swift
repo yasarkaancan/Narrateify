@@ -17,21 +17,32 @@ final class ReaderController: NSObject, ObservableObject, AVSpeechSynthesizerDel
     @Published var highlight: NSRange?
     @Published private(set) var isPlaying = false
 
+    /// The utterance currently being spoken. Delegate callbacks for any other
+    /// (replaced) utterance are ignored — `stopSpeaking` on a re-read fires a
+    /// late `didCancel` that would otherwise flip the new read to "not playing".
+    private var current: AVSpeechUtterance?
+    private var lastVoice = ""
+    private var lastSpeed = 1.0
+
     override init() {
         super.init()
         synth.delegate = self
     }
 
     func read(_ text: String, voiceIdentifier: String, speed: Double) {
+        current = nil
         synth.stopSpeaking(at: .immediate)
         self.text = text
         self.highlight = nil
+        lastVoice = voiceIdentifier
+        lastSpeed = speed
 
         let u = AVSpeechUtterance(string: text)
         if let v = AVSpeechSynthesisVoice(identifier: voiceIdentifier) { u.voice = v }
         let scaled = AVSpeechUtteranceDefaultSpeechRate * Float(speed)
         u.rate = min(max(scaled, AVSpeechUtteranceMinimumSpeechRate),
                      AVSpeechUtteranceMaximumSpeechRate)
+        current = u
         synth.speak(u)
         isPlaying = true
     }
@@ -43,10 +54,14 @@ final class ReaderController: NSObject, ObservableObject, AVSpeechSynthesizerDel
         } else if synth.isSpeaking {
             synth.pauseSpeaking(at: .word)
             isPlaying = false
+        } else if !text.isEmpty {
+            // Finished or stopped: Play starts the text over.
+            read(text, voiceIdentifier: lastVoice, speed: lastSpeed)
         }
     }
 
     func stop() {
+        current = nil
         synth.stopSpeaking(at: .immediate)
         isPlaying = false
         highlight = nil
@@ -57,12 +72,17 @@ final class ReaderController: NSObject, ObservableObject, AVSpeechSynthesizerDel
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                        willSpeakRangeOfSpeechString characterRange: NSRange,
                                        utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.highlight = characterRange }
+        Task { @MainActor in
+            guard self.current === utterance else { return }
+            self.highlight = characterRange
+        }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                        didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
+            guard self.current === utterance else { return }
+            self.current = nil
             self.isPlaying = false
             self.highlight = nil
         }
@@ -71,6 +91,8 @@ final class ReaderController: NSObject, ObservableObject, AVSpeechSynthesizerDel
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                        didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in
+            guard self.current === utterance else { return }
+            self.current = nil
             self.isPlaying = false
             self.highlight = nil
         }

@@ -39,7 +39,16 @@ enum ScreenshotOCR {
         }
     }
 
-    private static func recognizeText(in cgImage: CGImage, completion: @escaping (String?) -> Void) {
+    private static func recognizeText(in cgImage: CGImage, completion rawCompletion: @escaping (String?) -> Void) {
+        // `perform` runs synchronously on this thread, so a plain flag suffices
+        // to guarantee a single callback (Vision may both call the request's
+        // handler with an error *and* throw).
+        var delivered = false
+        let completion: (String?) -> Void = { text in
+            guard !delivered else { return }
+            delivered = true
+            rawCompletion(text)
+        }
         let request = VNRecognizeTextRequest { request, _ in
             guard let observations = request.results as? [VNRecognizedTextObservation] else {
                 completion(nil)
@@ -63,6 +72,12 @@ enum ScreenshotOCR {
         request.minimumTextHeight = 0.012
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        try? handler.perform([request])
+        do {
+            try handler.perform([request])
+        } catch {
+            // The request's handler isn't called when perform throws; report
+            // "no text" so the UI doesn't hang on "Select a region…".
+            completion(nil)
+        }
     }
 }

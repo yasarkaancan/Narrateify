@@ -63,7 +63,7 @@ SIGN_ID="${NARRATEIFY_SIGN_ID:-}"
 if [ -z "$SIGN_ID" ]; then
     SIGN_ID="$(security find-identity -v -p codesigning \
         | grep "Developer ID Application" | head -1 \
-        | sed -E 's/.*"(.*)"$/\1/')"
+        | sed -E 's/.*"(.*)"$/\1/' || true)"   # no match → ad-hoc fallback, not a set -e exit
 fi
 
 VERSION="$(/usr/bin/defaults read "$APP_PATH/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "0.0")"

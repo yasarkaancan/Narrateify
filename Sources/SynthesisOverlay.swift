@@ -11,13 +11,26 @@ final class SynthesisOverlay: NSObject, NSWindowDelegate {
     static let shared = SynthesisOverlay()
 
     private var panel: OverlayPanel?
+    /// Bumped on every show/hide so a fade-out that's still running when the
+    /// overlay is shown again doesn't order the panel out afterwards.
+    private var transition = 0
 
     private let originXKey = "overlayOriginX"
     private let originYKey = "overlayOriginY"
 
     func show() {
         let panel = ensurePanel()
-        guard !panel.isVisible else { return }   // already up; content self-updates
+        transition += 1
+        guard !panel.isVisible else {
+            // Already up (content self-updates) — or mid fade-out: fade back in.
+            if panel.alphaValue < 1 {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.15
+                    panel.animator().alphaValue = 1
+                }
+            }
+            return
+        }
 
         position(panel)
         let target = panel.frame
@@ -38,12 +51,18 @@ final class SynthesisOverlay: NSObject, NSWindowDelegate {
 
     func hide() {
         guard let panel, panel.isVisible else { return }
+        transition += 1
+        let token = transition
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.22
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
-        }, completionHandler: {
-            panel.orderOut(nil)
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                // Shown again while fading out — leave it on screen.
+                guard self?.transition == token else { return }
+                panel.orderOut(nil)
+            }
         })
     }
 

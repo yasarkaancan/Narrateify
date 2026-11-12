@@ -45,17 +45,24 @@ enum AudioJoiner {
         // Mirror the format-preserving writer pattern used in AppleTTS.swift.
         let fmt = first.processingFormat
         let outURL = tmp.appendingPathComponent("out.wav")
-        let out = try AVAudioFile(forWriting: outURL,
-                                  settings: fmt.settings,
-                                  commonFormat: fmt.commonFormat,
-                                  interleaved: fmt.isInterleaved)
-        for f in inputs {
-            guard f.processingFormat == fmt else { throw JoinError.formatMismatch }
-            let frames = AVAudioFrameCount(f.length)
-            guard frames > 0,
-                  let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames) else { continue }
-            try f.read(into: buf)
-            try out.write(from: buf)
+        // The writer must be released before reading the file back: AVAudioFile
+        // only finalizes the RIFF header (data length) when it's closed, and an
+        // unfinalized header makes the joined file report a 0s duration.
+        try autoreleasepool {
+            // Store in the source's on-disk format (e.g. 16-bit PCM) rather than
+            // the float processing format, which would double the file size.
+            let out = try AVAudioFile(forWriting: outURL,
+                                      settings: first.fileFormat.settings,
+                                      commonFormat: fmt.commonFormat,
+                                      interleaved: fmt.isInterleaved)
+            for f in inputs {
+                guard f.processingFormat == fmt else { throw JoinError.formatMismatch }
+                let frames = AVAudioFrameCount(f.length)
+                guard frames > 0,
+                      let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames) else { continue }
+                try f.read(into: buf)
+                try out.write(from: buf)
+            }
         }
         return try Data(contentsOf: outURL)
     }

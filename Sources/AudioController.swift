@@ -8,6 +8,9 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var hasAudio = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
+    /// True once a single-file narration has played to the end. The audio stays
+    /// loaded (so it can be replayed), but the player is no longer busy.
+    @Published private(set) var finished = false
     /// Playback speed multiplier (0.5–2.0). Persisted and applied live.
     @Published var rate: Float = UserDefaults.standard.object(forKey: "playbackRate") as? Float ?? 1.0 {
         didSet {
@@ -70,6 +73,7 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         duration = p.duration
         currentTime = 0
         hasAudio = true
+        finished = false
         if autoplay { play() }
     }
 
@@ -83,6 +87,7 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard let player else { return }
         player.play()
         isPlaying = true
+        finished = false
         startTicker()
     }
 
@@ -108,6 +113,7 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
         player = nil
         isPlaying = false
         hasAudio = false
+        finished = false
         currentTime = 0
         duration = 0
         stopTicker()
@@ -315,7 +321,10 @@ final class AudioController: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async {
+            // Ignore a late callback from a player that has since been replaced.
+            guard self.player === player else { return }
             self.isPlaying = false
+            self.finished = true
             self.currentTime = self.duration
             self.stopTicker()
             self.onFinished?()

@@ -60,7 +60,8 @@ struct MenuContent: View {
                 Label("Stop", systemImage: "stop.fill")
             }
             .keyboardShortcut("x", modifiers: [.control, .option])
-            .disabled(!state.audio.hasAudio)
+            // Also allow cancelling an in-progress synthesis (no audio yet).
+            .disabled(!state.audio.hasAudio && !state.isSynthesizing && state.queue.isEmpty)
 
             Divider().padding(.vertical, 2)
 
@@ -271,6 +272,7 @@ struct SpeedMenu: View {
     }
 
     private func format(_ r: Float) -> String {
-        (r == r.rounded() ? String(format: "%.0f×", r) : String(format: "%.2g×", r))
+        // %g trims trailing zeros without rounding (1.25 → "1.25", not "1.2").
+        String(format: "%g×", r)
     }
 }

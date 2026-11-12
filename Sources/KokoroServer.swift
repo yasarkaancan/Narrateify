@@ -64,6 +64,9 @@ final class KokoroServer: ObservableObject {
         log = ""
         appendLog("Installing Kokoro… this downloads PyTorch and can take a few minutes.\n")
 
+        // Drop any stale marker so an interrupted reinstall isn't seen as installed.
+        try? FileManager.default.removeItem(at: marker)
+
         // Write the server script up front so it's ready once deps are in place.
         do {
             try Self.serverScriptSource.write(to: serverScript, atomically: true, encoding: .utf8)
@@ -74,6 +77,7 @@ final class KokoroServer: ObservableObject {
 
         // PIP_USER=0 / PYTHONNOUSERSITE neutralize Anaconda/global pip configs
         // that force `--user`, which is illegal inside a virtualenv.
+        // Kokoro 0.9.x requires Python >=3.10,<3.13.
         let script = """
         set -e
         export PIP_USER=0
@@ -82,9 +86,10 @@ final class KokoroServer: ObservableObject {
         export HF_HOME="\(baseDir.path)/hf"
         export TORCH_HOME="\(baseDir.path)/torch"
         cd "\(baseDir.path)"
-        PY="$(command -v python3 || true)"
-        if [ -z "$PY" ]; then echo "ERROR: python3 not found on PATH"; exit 1; fi
-        echo "Using $($PY --version) at $PY"
+        \(LocalServerSupport.pythonResolverScript(baseDir: baseDir, versions: ["3.12", "3.11", "3.10"]))
+        # Start from a clean venv: a previous failed attempt may have left one
+        # built with an incompatible interpreter.
+        rm -rf venv
         "$PY" -m venv venv
         ./venv/bin/python -m pip install --upgrade pip
         ./venv/bin/python -m pip install "kokoro>=0.9.4" soundfile numpy
@@ -113,6 +118,10 @@ final class KokoroServer: ObservableObject {
         status = .starting
         appendLog("Starting Kokoro server on port \(port)…\n")
 
+        // Refresh the embedded server script so improvements ship without a
+        // full reinstall.
+        try? Self.serverScriptSource.write(to: serverScript, atomically: true, encoding: .utf8)
+
         // Clear any orphan from a previous run that may still hold the port.
         LocalServerSupport.killProcesses(onPort: port)
 
@@ -140,11 +149,25 @@ final class KokoroServer: ObservableObject {
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor in self?.appendLog(text) }
         }
-        p.terminationHandler = { [weak self] _ in
+        p.terminationHandler = { [weak self, weak p] proc in
+            let code = proc.terminationStatus
             Task { @MainActor in
-                self?.process = nil
-                self?.status = .stopped
-                self?.appendLog("Kokoro server stopped.\n")
+                guard let self else { return }
+                // A process we already stopped/replaced: just note it. Without
+                // this check, a late exit from the old server would mark a
+                // freshly restarted one as stopped.
+                guard let p, self.process === p else {
+                    self.appendLog("Kokoro server stopped.\n")
+                    return
+                }
+                self.process = nil
+                if case .failed = self.status { return }   // keep the real error
+                if code != 0 || self.status == .starting {
+                    self.fail("Kokoro server exited unexpectedly (code \(code)) — see the log above.")
+                } else {
+                    self.status = .stopped
+                    self.appendLog("Kokoro server stopped.\n")
+                }
             }
         }
 
@@ -249,7 +272,7 @@ final class KokoroServer: ObservableObject {
     /// A minimal stdlib HTTP server wrapping `kokoro.KPipeline`. No web
     /// framework — only the venv's `kokoro`, `soundfile`, and `numpy`.
     private static let serverScriptSource = """
-    import io, json, argparse
+    import io, json, argparse, threading
     import numpy as np
     import soundfile as sf
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -262,6 +285,9 @@ final class KokoroServer: ObservableObject {
     ]
 
     pipelines = {}
+    # The HTTP server is threaded, but a KPipeline isn't safe to drive from two
+    # requests at once (e.g. a voice preview during a narration). Serialize.
+    synth_lock = threading.Lock()
 
     def get_pipeline(lang_code):
         if lang_code not in pipelines:
@@ -269,6 +295,10 @@ final class KokoroServer: ObservableObject {
         return pipelines[lang_code]
 
     def synth(text, voice, speed):
+        with synth_lock:
+            return _synth(text, voice, speed)
+
+    def _synth(text, voice, speed):
         lang = voice[0] if voice else "a"
         pipe = get_pipeline(lang)
         parts = []
@@ -328,7 +358,8 @@ final class KokoroServer: ObservableObject {
         parser.add_argument("--port", type=int, default=8765)
         args = parser.parse_args()
         try:
-            get_pipeline("a")   # warm up American English
+            with synth_lock:
+                get_pipeline("a")   # warm up American English
         except Exception as e:
             print("warmup failed:", e, flush=True)
         server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

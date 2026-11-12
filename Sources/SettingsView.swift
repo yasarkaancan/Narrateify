@@ -246,6 +246,9 @@ struct ModelsView: View {
                 case .installing:
                     ProgressView().controlSize(.small)
                     Text("Installing…").foregroundStyle(.secondary)
+                case .failed where !state.kokoro.isInstalled:
+                    // A failed install leaves nothing to start — offer a retry.
+                    Button("Retry Install") { state.kokoro.install() }
                 case .stopped, .failed:
                     Button("Start Server") { state.kokoro.start() }
                     if case .failed = state.kokoro.status {
@@ -342,6 +345,9 @@ struct ModelsView: View {
                 case .installing:
                     ProgressView().controlSize(.small)
                     Text("Installing…").foregroundStyle(.secondary)
+                case .failed where !state.chatterbox.isInstalled:
+                    // A failed install leaves nothing to start — offer a retry.
+                    Button("Retry Install") { state.chatterbox.install() }
                 case .stopped, .failed:
                     Button("Start Server") { state.chatterbox.start() }
                     if case .failed = state.chatterbox.status {

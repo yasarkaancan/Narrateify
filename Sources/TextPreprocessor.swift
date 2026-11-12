@@ -57,8 +57,10 @@ struct TextPreprocessor {
         // Academic cleanup runs while line breaks are still present (needed for
         // de-hyphenation) and before markdown/URL handling.
         if citationMode != .none { s = Self.cleanCitations(s, mode: citationMode) }
-        if simplifyURLs { s = Self.simplifyURLs(in: s) }
+        // Markdown first: the URL stage's `\S*` would otherwise swallow the
+        // closing ")" of a `[label](https://…)` link and leave "[label](host".
         if stripMarkdown { s = Self.stripMarkdown(from: s) }
+        if simplifyURLs { s = Self.simplifyURLs(in: s) }
         if expandAbbreviations { s = Self.expandAbbreviations(in: s) }
         // Collapse runs of whitespace left behind by the substitutions.
         s = Self.replace("[ \\t]{2,}", in: s, with: " ")
@@ -81,14 +83,17 @@ struct TextPreprocessor {
         s = replace("[ \\t]*\\[\\s*\\d+(?:\\s*[–—-]\\s*\\d+)?(?:\\s*,\\s*\\d+(?:\\s*[–—-]\\s*\\d+)?)*\\s*\\]",
                     in: s, with: "")
 
-        // Spell out reference abbreviations so they read naturally.
+        // Spell out reference abbreviations so they read naturally — only when
+        // followed by a number ("Fig. 3", "Eq. (2)") or, for appendices, a
+        // label ("App. A"), so everyday words ("this app.", "figs.") survive.
+        let number = "(?=\\s*\\(?\\d)"
         let abbreviations: [(String, String)] = [
-            ("\\bFigs?\\.", "Figure"), ("\\bEqs?\\.", "Equation"),
-            ("\\bTabs?\\.", "Table"), ("\\bSecs?\\.", "Section"),
-            ("\\bRefs?\\.", "Reference"), ("\\bApp\\.", "Appendix")
+            ("\\b[Ff]igs?\\.\(number)", "Figure"), ("\\b[Ee]qs?\\.\(number)", "Equation"),
+            ("\\b[Tt]abs?\\.\(number)", "Table"), ("\\b[Ss]ecs?\\.\(number)", "Section"),
+            ("\\b[Rr]efs?\\.\(number)", "Reference"), ("\\bApp\\.(?=\\s*(?:\\d|[A-Z]\\b))", "Appendix")
         ]
         for (pattern, replacement) in abbreviations {
-            s = replace(pattern, in: s, with: replacement, caseInsensitive: true)
+            s = replace(pattern, in: s, with: replacement)
         }
 
         // Strip DOIs (bare URLs are handled by the URL stage).
@@ -148,8 +153,12 @@ struct TextPreprocessor {
         s = replace("(?m)^\\s*>\\s?", in: s, with: "")                      // block quotes
         s = replace("(?m)^\\s*[-*+]\\s+", in: s, with: "")                  // bullet markers
         s = replace("(?m)^\\s*([-*_])(?:\\s*\\1){2,}\\s*$", in: s, with: "") // horizontal rules
-        s = replace("(\\*\\*|__)(.+?)\\1", in: s, with: "$2")              // bold
-        s = replace("(\\*|_)(.+?)\\1", in: s, with: "$2")                  // italics
+        // Emphasis must hug its text ("*word*", not "2 * 3 * 4"), and underscore
+        // emphasis can't sit inside a word ("config_file_name" is left alone).
+        s = replace("\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*", in: s, with: "$1")          // bold
+        s = replace("(?<!\\w)__(?=\\S)(.+?)(?<=\\S)__(?!\\w)", in: s, with: "$1")
+        s = replace("\\*(?=\\S)(.+?)(?<=\\S)\\*", in: s, with: "$1")                // italics
+        s = replace("(?<!\\w)_(?=\\S)(.+?)(?<=\\S)_(?!\\w)", in: s, with: "$1")
         return s
     }
 
@@ -160,7 +169,7 @@ struct TextPreprocessor {
             ("\\be\\.g\\.", "for example"),
             ("\\bi\\.e\\.", "that is"),
             ("\\betc\\.", "et cetera"),
-            ("\\bvs\\.?", "versus"),
+            ("\\bvs\\b\\.?", "versus"),
             ("\\bapprox\\.", "approximately"),
             ("\\bw/", "with"),
             ("\\s&\\s", " and ")

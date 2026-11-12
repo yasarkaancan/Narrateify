@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import AVFoundation
 @testable import Narrateify
 
 /// Unit tests for the pure-logic helpers. These don't touch the UI or network.
@@ -306,5 +307,54 @@ final class LogicTests: XCTestCase {
         XCTAssertNil(AppState.bareURL(in: "read this https://example.com please"))
         XCTAssertNil(AppState.bareURL(in: "just some text"))
         XCTAssertNil(AppState.bareURL(in: "ftp://example.com"))
+    }
+
+    // MARK: Regressions
+
+    func testMarkdownLinkWithURLReadsAsLabel() {
+        let out = TextPreprocessor().process("Read [the docs](https://example.com/guide/start) now.")
+        XCTAssertEqual(out, "Read the docs now.")
+    }
+
+    func testReferenceAbbreviationsLeaveEverydayWordsAlone() {
+        let p = TextPreprocessor(citationMode: .smart)
+        XCTAssertEqual(p.process("I love this app. It works."), "I love this app. It works.")
+        XCTAssertEqual(p.process("I like figs. And dates."), "I like figs. And dates.")
+        XCTAssertEqual(p.process("See Fig. 3 and Eq. (2) in App. A."),
+                       "See Figure 3 and Equation (2) in Appendix A.")
+    }
+
+    func testVersusOnlyMatchesWholeWord() {
+        XCTAssertEqual(TextPreprocessor.expandAbbreviations(in: "vsync vs. triple buffering"),
+                       "vsync versus triple buffering")
+    }
+
+    func testEmphasisStrippingKeepsIdentifiersAndMath() {
+        XCTAssertEqual(TextPreprocessor.stripMarkdown(from: "Edit config_file_name now."),
+                       "Edit config_file_name now.")
+        XCTAssertEqual(TextPreprocessor.stripMarkdown(from: "Compute 2 * 3 * 4."), "Compute 2 * 3 * 4.")
+        XCTAssertEqual(TextPreprocessor.stripMarkdown(from: "*a* **b** _c_ __d__"), "a b c d")
+    }
+
+    func testJoinedWAVKeepsFullDuration() throws {
+        func tone(seconds: Double) throws -> Data {
+            let fmt = AVAudioFormat(standardFormatWithSampleRate: 24000, channels: 1)!
+            let frames = AVAudioFrameCount(24000 * seconds)
+            let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames)!
+            buf.frameLength = frames
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("join-test-\(UUID().uuidString).wav")
+            defer { try? FileManager.default.removeItem(at: url) }
+            try autoreleasepool {
+                let f = try AVAudioFile(forWriting: url, settings: [
+                    AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 24000,
+                    AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16])
+                try f.write(from: buf)
+            }
+            return try Data(contentsOf: url)
+        }
+        let joined = AudioJoiner.join([try tone(seconds: 1), try tone(seconds: 2)], fileExtension: "wav")
+        let duration = try AVAudioPlayer(data: joined).duration
+        XCTAssertEqual(duration, 3, accuracy: 0.05)
     }
 }
